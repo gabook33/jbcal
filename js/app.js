@@ -41,7 +41,11 @@ const S = {
   tickerOpen: false, // 휴대폰 위 날짜 줄이 월 달력으로 펼쳐졌는지
   listFrom: null, // 연속 목록이 시작하는 날
   listDays: 0,
-  jump: true, // 다음 렌더링 때 목록을 S.cursor 날짜로 스크롤
+  jump: true, // 다음 렌더링 때 목록·월 보기를 S.cursor 날짜로 스크롤
+  mvFrom: null, // 월 보기 연속 스크롤이 시작하는 주(일요일)
+  mvWeeks: 0,
+  mcFrom: null, // 미니 달력 연속 스크롤이 시작하는 주
+  mcWeeks: 0,
 };
 S.miniMonth = startOfMonth(S.cursor);
 
@@ -69,6 +73,34 @@ function anchorList() {
   }
 }
 
+const WEEK = 7 * DAY;
+// 미니 달력이 지금 스크롤로 보여 주는 달. S.miniMonth 와 같으면 다시 그려도 스크롤 위치를 지킨다.
+let miniShown = null;
+const weeksTo = (from, to) => Math.round((startOfWeek(to) - from) / WEEK) + 1;
+
+/** 월 보기 연속 스크롤 범위. 스크롤 중에는 onMonthScroll 이 늘리고,
+ *  날짜로 바로 갈 때(S.jump)만 그 달 앞뒤로 여유가 없으면 다시 잡는다 */
+function anchorMonthView() {
+  const m = startOfMonth(S.cursor);
+  const first = startOfWeek(m);
+  const end = S.mvFrom + S.mvWeeks * WEEK;
+  if (S.mvFrom == null || (S.jump && (first < S.mvFrom + 4 * WEEK || first + 10 * WEEK > end))) {
+    S.mvFrom = startOfWeek(addMonths(m, -3));
+    S.mvWeeks = weeksTo(S.mvFrom, addMonths(m, 5));
+  }
+}
+
+/** 미니 달력 연속 스크롤 범위. 사용자가 미니 달력을 스크롤하는 중(miniShown === S.miniMonth)에는 그대로 둔다 */
+function anchorMini() {
+  const first = startOfWeek(S.miniMonth);
+  const end = S.mcFrom + S.mcWeeks * WEEK;
+  if (S.mcFrom == null
+    || (miniShown !== S.miniMonth && (first < S.mcFrom + 2 * WEEK || first + 8 * WEEK > end))) {
+    S.mcFrom = startOfWeek(addMonths(S.miniMonth, -3));
+    S.mcWeeks = weeksTo(S.mcFrom, addMonths(S.miniMonth, 4));
+  }
+}
+
 function viewRange(view = effView(), cursor = S.cursor) {
   if (view === 'day') return [startOfDay(cursor), startOfDay(cursor) + DAY];
   if (view === 'week') {
@@ -76,11 +108,8 @@ function viewRange(view = effView(), cursor = S.cursor) {
     return [start, start + (mq.matches ? 3 : 7) * DAY];
   }
   if (view === 'month') {
-    const first = startOfMonth(cursor);
-    const gs = startOfWeek(first);
-    const daysInMonth = Math.round((addMonths(first, 1) - first) / DAY);
-    const weeks = Math.ceil((P(first).dow + daysInMonth) / 7);
-    return [gs, gs + weeks * 7 * DAY];
+    anchorMonthView();
+    return [S.mvFrom, S.mvFrom + S.mvWeeks * WEEK];
   }
   anchorList();
   return [S.listFrom, S.listFrom + S.listDays * DAY]; // list
@@ -89,8 +118,10 @@ function viewRange(view = effView(), cursor = S.cursor) {
 async function ensureEvents(force = false) {
   const today = startOfDay(Date.now());
   const [vs, ve] = viewRange();
-  const ms = Math.min(startOfWeek(S.miniMonth), startOfWeek(startOfMonth(S.cursor)));
-  const me = Math.max(startOfWeek(S.miniMonth), startOfWeek(startOfMonth(S.cursor))) + 42 * DAY;
+  anchorMini();
+  const cm = startOfWeek(startOfMonth(S.cursor));
+  const ms = Math.min(S.mcFrom, cm);
+  const me = Math.max(S.mcFrom + S.mcWeeks * WEEK, cm + 42 * DAY);
   const from = Math.min(vs, ms, today);
   const to = Math.max(ve, me, today + 15 * DAY);
   const L = S.loaded;
@@ -176,44 +207,112 @@ function renderChrome() {
 }
 
 function miniHTML() {
-  const m = S.miniMonth;
-  const mp = P(m);
-  const gs = startOfWeek(m);
+  anchorMini();
+  const mp = P(S.miniMonth);
   const today = startOfDay(Date.now());
   const sel = startOfDay(S.cursor);
   const [vs, ve] = viewRange();
   const view = effView();
-  let cells = '';
-  for (let i = 0; i < 42; i++) {
-    const d = gs + i * DAY;
-    const p = P(d);
-    const evs = visibleEvents(d, d + DAY);
-    const dots = [...new Set(evs.map(colorOf))].slice(0, 3)
-      .map((c) => `<i style="background:${c}"></i>`).join('');
-    const holiday = evs.some(isHoliday);
-    const cls = [
-      'mc-day',
-      p.m !== mp.m && 'other',
-      d === today && 'today',
-      d === sel && 'sel',
-      d >= vs && d < ve && view !== 'month' && view !== 'list' && 'inrange',
-      (p.dow === 0 || holiday) && 'sun',
-      p.dow === 6 && 'sat',
-    ].filter(Boolean).join(' ');
-    cells += `<button class="${cls}" data-day="${dayKey(d)}"><span>${p.d}</span><b>${dots}</b></button>`;
+  let rows = '';
+  for (let w = 0; w < S.mcWeeks; w++) {
+    const ws = S.mcFrom + w * WEEK;
+    let cells = '';
+    for (let i = 0; i < 7; i++) {
+      const d = ws + i * DAY;
+      const p = P(d);
+      const evs = visibleEvents(d, d + DAY);
+      const dots = [...new Set(evs.map(colorOf))].slice(0, 3)
+        .map((c) => `<i style="background:${c}"></i>`).join('');
+      const holiday = evs.some(isHoliday);
+      const cls = [
+        'mc-day',
+        (p.m !== mp.m || p.y !== mp.y) && 'other',
+        d === today && 'today',
+        d === sel && 'sel',
+        d >= vs && d < ve && view !== 'month' && view !== 'list' && 'inrange',
+        (p.dow === 0 || holiday) && 'sun',
+        p.dow === 6 && 'sat',
+      ].filter(Boolean).join(' ');
+      cells += `<button class="${cls}" data-day="${dayKey(d)}"><span>${p.d}</span><b>${dots}</b></button>`;
+    }
+    rows += `<div class="mc-week" data-date="${dayKey(ws)}">${cells}</div>`;
   }
   return `
     <div class="mc-head">
-      <strong>${mp.y}년 ${mp.m + 1}월</strong>
+      <strong id="mcTitle">${mp.y}년 ${mp.m + 1}월</strong>
       <span>
         <button class="icon-btn sm" data-mini="-1" aria-label="이전 달">‹</button>
         <button class="icon-btn sm" data-mini="1" aria-label="다음 달">›</button>
       </span>
     </div>
-    <div class="mc-grid">${WD.map((w, i) => `<span class="mc-wd ${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}${cells}</div>`;
+    <div class="mc-grid">${WD.map((w, i) => `<span class="mc-wd ${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
+    <div class="mc-scroll">${rows}</div>`;
 }
+
 function renderMini() {
-  $('#mini').innerHTML = miniHTML();
+  const box = $('#mini');
+  const prev = box.querySelector('.mc-scroll');
+  const keep = prev && miniShown === S.miniMonth && prev.getClientRects().length
+    ? topDay(prev, '.mc-week') : null;
+  box.innerHTML = miniHTML();
+  const c = box.querySelector('.mc-scroll');
+  if (!keep || !scrollToDay(c, keep.key, keep.off, '.mc-week')) scrollToDay(c, dayKey(startOfWeek(S.miniMonth)), 0, '.mc-week');
+  miniShown = S.miniMonth;
+  c.addEventListener('scroll', onMiniScroll, { passive: true });
+}
+
+/** 스크롤 상자 한가운데 줄의 수요일이 속한 달 = 지금 보이는 달 */
+function centerMonth(c) {
+  const row = c.firstElementChild;
+  if (!row || !c.isConnected || !row.offsetHeight) return null;
+  const idx = Math.floor((c.scrollTop + c.clientHeight / 2) / row.offsetHeight);
+  const r = c.children[Math.min(Math.max(idx, 0), c.children.length - 1)];
+  return startOfMonth(fromDayKey(r.dataset.date) + 3 * DAY);
+}
+/** 보이는 달이 아닌 날짜는 흐리게 */
+function markMonth(c, m, sel) {
+  const mk = dayKey(m).slice(0, 7);
+  c.querySelectorAll(sel).forEach((el) => el.classList.toggle('other', el.dataset.day.slice(0, 7) !== mk));
+}
+
+let miniTick = 0;
+let miniExtending = false;
+function onMiniScroll(ev) {
+  const c = ev.currentTarget;
+  if (miniTick) return;
+  miniTick = requestAnimationFrame(() => {
+    miniTick = 0;
+    if (!c.isConnected) return; // 그사이 다시 그려진 옛 상자
+    const m = centerMonth(c);
+    if (m != null && m !== S.miniMonth) {
+      S.miniMonth = m;
+      miniShown = m;
+      const mp = P(m);
+      $('#mcTitle').textContent = `${mp.y}년 ${mp.m + 1}월`;
+      markMonth(c, m, '.mc-day');
+    }
+    if (miniExtending) return;
+    const rh = c.firstElementChild?.offsetHeight || 36;
+    // 끝에 가까워지면 석 달씩 더 붙이고, 너무 길어지면 반대쪽을 덜어 낸다
+    if (c.scrollHeight - c.scrollTop - c.clientHeight < 4 * rh) {
+      S.mcWeeks += 13;
+      if (S.mcWeeks > 52) { S.mcFrom += 13 * WEEK; S.mcWeeks -= 13; }
+    } else if (c.scrollTop < 4 * rh) {
+      S.mcFrom -= 13 * WEEK;
+      S.mcWeeks = Math.min(S.mcWeeks + 13, 52);
+    } else return;
+    miniExtending = true;
+    render().finally(() => { miniExtending = false; });
+  });
+}
+
+/** 미니 달력 ‹ › : 이웃 달 첫 주로 부드럽게 스크롤 */
+function miniStep(dir) {
+  const c = $('#mini .mc-scroll');
+  const target = addMonths(S.miniMonth, dir);
+  const row = c?.querySelector(`.mc-week[data-date="${dayKey(startOfWeek(target))}"]`);
+  if (!row || !c.getClientRects().length) { S.miniMonth = target; render(); return; }
+  c.scrollTo({ top: row.offsetTop, behavior: 'smooth' });
 }
 
 /* ---------- 휴대폰 위 날짜 줄 (접으면 한 주, 펼치면 한 달) ---------- */
@@ -371,17 +470,18 @@ function listHTML(from, days) {
 const nowLineHTML = (now) => `<div class="ag-now"><span>${fmtTime(now)}</span></div>`;
 
 /** 목록 맨 위에 보이는 날과 그 날의 화면상 위치 */
-function topDay(c) {
+function topDay(c, sel = '.ag-day') {
   const top = c.getBoundingClientRect().top;
-  for (const el of c.querySelectorAll('.ag-day')) {
+  for (const el of c.querySelectorAll(sel)) {
     const r = el.getBoundingClientRect();
     if (r.bottom > top + 2) return { key: el.dataset.date, off: r.top - top };
   }
   return null;
 }
-function scrollToDay(c, key, off = 0) {
-  const el = c.querySelector(`.ag-day[data-date="${key}"]`);
+function scrollToDay(c, key, off = 0, sel = '.ag-day') {
+  const el = c.querySelector(`${sel}[data-date="${key}"]`);
   if (el) c.scrollTop += el.getBoundingClientRect().top - c.getBoundingClientRect().top - off;
+  return !!el;
 }
 
 let listTick = 0;
@@ -443,18 +543,32 @@ function renderView() {
     c.addEventListener('scroll', onListScroll, { passive: true });
     return;
   }
-  el.className = `view v-${view}`;
-  if (view === 'month') el.innerHTML = monthHTML();
-  else {
-    const [vs, ve] = viewRange();
-    const days = [];
-    for (let d = vs; d < ve; d += DAY) days.push(d);
-    el.innerHTML = timeGridHTML(days);
-    const sc = el.querySelector('.tg-scroll');
-    const nowP = P(Date.now());
-    const target = days.some((d) => d === startOfDay(Date.now())) ? Math.max(nowP.h - 2, 0) : 8;
-    sc.scrollTop = target * HH - 4;
+  if (view === 'month') {
+    const prev = el.querySelector('.mv-scroll');
+    const keep = prev && prev.getClientRects().length ? topDay(prev, '.mv-week') : null;
+    el.className = 'view v-month';
+    el.innerHTML = monthHTML();
+    const c = el.querySelector('.mv-scroll');
+    const kept = !!keep && scrollToDay(c, keep.key, keep.off, '.mv-week');
+    if (S.jump || !kept) {
+      const row = c.querySelector(`.mv-week[data-date="${dayKey(startOfWeek(startOfMonth(S.cursor)))}"]`);
+      // 가까운 달로 옮길 때(‹ › · 방향키)는 부드럽게, 멀리 가면 바로
+      if (row && kept && Math.abs(row.offsetTop - c.scrollTop) < 12 * row.offsetHeight) {
+        c.scrollTo({ top: row.offsetTop, behavior: 'smooth' });
+      } else if (row) c.scrollTop = row.offsetTop;
+    }
+    c.addEventListener('scroll', onMonthScroll, { passive: true });
+    return;
   }
+  el.className = `view v-${view}`;
+  const [vs, ve] = viewRange();
+  const days = [];
+  for (let d = vs; d < ve; d += DAY) days.push(d);
+  el.innerHTML = timeGridHTML(days);
+  const sc = el.querySelector('.tg-scroll');
+  const nowP = P(Date.now());
+  const target = days.some((d) => d === startOfDay(Date.now())) ? Math.max(nowP.h - 2, 0) : 8;
+  sc.scrollTop = target * HH - 4;
 }
 
 /* 겹치는 일정은 옆으로 나눠 배치 */
@@ -528,29 +642,122 @@ function chipHTML(e, filled = false) {
   return `<button class="chip" data-id="${esc(e.id)}" style="--c:${c}"><i></i><span class="ct">${fmtTime(e.start).replace(':00', '')}</span> ${esc(e.title)}</button>`;
 }
 
+/** 월 보기 한 주 줄 높이: 화면에 다섯 주가 보이게 */
+function monthRowH() {
+  const h = $('#view').clientHeight - 33;
+  return Math.max(92, Math.floor(h / 5));
+}
+
 function monthHTML() {
   const [gs, ge] = viewRange('month');
-  const cur = P(S.cursor).m;
+  const cur = startOfMonth(S.cursor);
   const today = startOfDay(Date.now());
-  const weeks = Math.round((ge - gs) / DAY / 7);
-  const maxChips = mq.matches ? 0 : weeks > 5 ? 3 : 4;
-  let cells = '';
-  for (let d = gs; d < ge; d += DAY) {
-    const p = P(d);
-    const evs = visibleEvents(d, d + DAY);
-    const holiday = evs.some(isHoliday);
-    const cls = ['mv-cell', p.m !== cur && 'other', d === today && 'today', (p.dow === 0 || holiday) && 'is-sun', p.dow === 6 && 'is-sat'].filter(Boolean).join(' ');
-    const shown = evs.slice(0, maxChips).map((e) => chipHTML(e)).join('');
-    const more = evs.length > maxChips
-      ? (maxChips ? `<span class="more">+${evs.length - maxChips}개 더</span>`
-        : `<span class="dots">${evs.slice(0, 4).map((e) => `<i style="background:${colorOf(e)}"></i>`).join('')}</span>`)
-      : '';
-    cells += `<div class="${cls}" data-day="${dayKey(d)}"><span class="mv-date">${p.d}</span>${shown}${more}</div>`;
+  const rowH = monthRowH();
+  // 날짜(26px)·여백을 빼고 칩(19px)이 들어가는 만큼만, 넘치면 마지막 줄을 「+N개 더」로
+  const fit = mq.matches ? 0 : Math.max(1, Math.floor((rowH - 32) / 19));
+  let rows = '';
+  for (let w = gs; w < ge; w += WEEK) {
+    let cells = '';
+    for (let d = w; d < w + WEEK; d += DAY) {
+      const p = P(d);
+      const evs = visibleEvents(d, d + DAY);
+      const holiday = evs.some(isHoliday);
+      const cls = ['mv-cell', startOfMonth(d) !== cur && 'other', d === today && 'today', (p.dow === 0 || holiday) && 'is-sun', p.dow === 6 && 'is-sat'].filter(Boolean).join(' ');
+      const maxChips = evs.length > fit ? Math.max(fit - 1, 0) : fit;
+      const shown = evs.slice(0, maxChips).map((e) => chipHTML(e)).join('');
+      const more = evs.length > maxChips
+        ? (maxChips || !mq.matches
+          ? `<button class="more" data-more="${dayKey(d)}" aria-label="${p.m + 1}월 ${p.d}일 일정 ${evs.length}개 모두 보기">+${evs.length - maxChips}개 더</button>`
+          : `<span class="dots">${evs.slice(0, 4).map((e) => `<i style="background:${colorOf(e)}"></i>`).join('')}</span>`)
+        : '';
+      const label = p.d === 1 ? `<span class="mv-mon">${p.m + 1}월</span>` : '';
+      cells += `<div class="${cls}" data-day="${dayKey(d)}"><span class="mv-dl">${label}<span class="mv-date">${p.d}</span></span>${shown}${more}</div>`;
+    }
+    rows += `<div class="mv-week" data-date="${dayKey(w)}">${cells}</div>`;
   }
-  return `<div class="mv" style="--weeks:${weeks}">
+  return `<div class="mv" style="--wh:${rowH}px">
     <div class="mv-head">${WD.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
-    <div class="mv-grid">${cells}</div>
+    <div class="mv-scroll">${rows}</div>
   </div>`;
+}
+
+let mvTick = 0;
+function onMonthScroll(ev) {
+  const c = ev.currentTarget;
+  closeDayPop();
+  if (mvTick) return;
+  mvTick = requestAnimationFrame(() => {
+    mvTick = 0;
+    if (!c.isConnected) return; // 그사이 다시 그려진 옛 상자
+    // 스크롤로 보이는 달이 바뀌면 제목·미니 달력·흐린 날짜를 따라 바꾼다
+    const m = centerMonth(c);
+    if (m != null && m !== startOfMonth(S.cursor)) {
+      S.cursor = m;
+      S.miniMonth = m;
+      markMonth(c, m, '.mv-cell');
+      renderChrome();
+      renderMini();
+    }
+    if (extending) return;
+    const rh = c.firstElementChild?.offsetHeight || 100;
+    if (c.scrollHeight - c.scrollTop - c.clientHeight < 3 * rh) {
+      S.mvWeeks += 9;
+      if (S.mvWeeks > 54) { S.mvFrom += 9 * WEEK; S.mvWeeks -= 9; }
+    } else if (c.scrollTop < 3 * rh) {
+      S.mvFrom -= 9 * WEEK;
+      S.mvWeeks = Math.min(S.mvWeeks + 9, 54);
+    } else return;
+    extending = true;
+    render().finally(() => { extending = false; });
+  });
+}
+
+/* ---------- 「+N개 더」: 그날 일정 전체를 작은 창으로 ---------- */
+
+function openDayPop(d, anchor) {
+  closeDayPop();
+  const evs = visibleEvents(d, d + DAY);
+  const now = Date.now();
+  const p = P(d);
+  const items = evs.map((e) => {
+    const time = e.allDay
+      ? '종일'
+      : `${e.start < d ? '…' : fmtTime(e.start)}<small>${e.end > d + DAY ? '…' : fmtTime(e.end)}</small>`;
+    return `<button class="ag-ev${!e.allDay && e.end < now ? ' past' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">
+      <span class="ag-time">${time}</span>
+      <span class="ag-bar"></span>
+      <span class="ag-body"><span class="ag-title">${esc(e.title)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}</span>
+    </button>`;
+  }).join('');
+  const pop = document.createElement('div');
+  pop.className = 'day-pop';
+  pop.id = 'dayPop';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', `${p.m + 1}월 ${p.d}일 일정`);
+  pop.innerHTML = `
+    <div class="dp-head">
+      <button class="dp-title${p.dow === 0 ? ' sun' : p.dow === 6 ? ' sat' : ''}" data-act="day-view" data-goto="${dayKey(d)}" title="일 보기로 열기">
+        <b>${p.d}</b><span>${p.m + 1}월 ${WD[p.dow]}요일</span>
+      </button>
+      <button class="icon-btn sm" data-act="close-pop" aria-label="닫기">×</button>
+    </div>
+    <div class="dp-list">${items || '<div class="ag-empty">일정 없음</div>'}</div>`;
+  document.body.append(pop);
+  // 누른 칸 위에 겹쳐 띄우고 화면 밖으로 나가지 않게 맞춘다
+  const cell = anchor.closest('.mv-cell') || anchor;
+  const r = cell.getBoundingClientRect();
+  const w = Math.max(r.width + 40, 280);
+  pop.style.width = `${w}px`;
+  const h = pop.offsetHeight;
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8);
+  const top = Math.min(Math.max(8, r.top - 6), innerHeight - h - 8);
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+  pop.tabIndex = -1;
+  pop.focus({ preventScroll: true });
+}
+function closeDayPop() {
+  $('#dayPop')?.remove();
 }
 
 function renderWelcome() {
@@ -917,6 +1124,12 @@ document.addEventListener('click', async (ev) => {
     return;
   }
   if (act === 'demo') { localStorage.setItem(K_MODE, 'demo'); location.reload(); return; }
+  if (act === 'close-pop') { closeDayPop(); return; }
+  if (act === 'day-view') { const k = t.closest('[data-goto]').dataset.goto; closeDayPop(); S.cursor = fromDayKey(k); S.miniMonth = startOfMonth(S.cursor); setView('day'); return; }
+  const pop = $('#dayPop');
+  if (pop && !t.closest('#dayPop')) closeDayPop();
+  const moreBtn = t.closest('[data-more]');
+  if (moreBtn) { openDayPop(fromDayKey(moreBtn.dataset.more), moreBtn); return; }
   if (act === 'reset-demo') { resetDemo(); S.loaded = null; render(); toast('예시 일정을 처음 상태로 되돌렸습니다'); return; }
 
   if (t.closest('#ticker')) {
@@ -927,11 +1140,12 @@ document.addEventListener('click', async (ev) => {
   const evBtn = t.closest('[data-id]');
   if (evBtn && !t.closest('dialog')) {
     const e = S.events.find((x) => x.id === evBtn.dataset.id);
+    closeDayPop();
     if (e) openEditor(e);
     return;
   }
   const mini = t.closest('[data-mini]');
-  if (mini) { S.miniMonth = addMonths(S.miniMonth, +mini.dataset.mini); render(); return; }
+  if (mini) { miniStep(+mini.dataset.mini); return; }
 
   const dayEl = t.closest('[data-day]');
   if (!dayEl) return;
@@ -956,7 +1170,7 @@ document.addEventListener('click', async (ev) => {
 
 document.addEventListener('dblclick', (ev) => {
   const cell = ev.target.closest('.mv-cell');
-  if (cell && !ev.target.closest('[data-id]')) newEventAt(fromDayKey(cell.dataset.day) + 9 * 3600e3);
+  if (cell && !ev.target.closest('[data-id], [data-more]')) newEventAt(fromDayKey(cell.dataset.day) + 9 * 3600e3);
 });
 
 document.addEventListener('change', (ev) => {
@@ -969,6 +1183,7 @@ document.addEventListener('change', (ev) => {
 
 // 단축키: t 오늘, d/w/m/l 보기, ←/→ 이동, n 빠른 입력
 document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && $('#dayPop')) { closeDayPop(); return; }
   if (ev.metaKey || ev.ctrlKey || ev.altKey || dlg.open) return;
   if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
   const k = ev.key;
@@ -980,6 +1195,13 @@ document.addEventListener('keydown', (ev) => {
   else if (k === 'ArrowLeft') go(-1);
   else if (k === 'ArrowRight') go(1);
   else if (k === 'n' || k === '/') { ev.preventDefault(); openQuick(); }
+});
+
+// 창 크기가 바뀌면 월 보기 줄 높이(한 화면 다섯 주)를 다시 잡는다
+let resizeTimer;
+addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (effView() === 'month' && !S.needsLogin) { closeDayPop(); render(); } }, 150);
 });
 
 mq.addEventListener('change', () => { placeAccount(); if (!mq.matches) closeQuick(); S.jump = true; render(); });
