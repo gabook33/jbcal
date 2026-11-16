@@ -549,6 +549,7 @@ function renderView() {
     el.className = 'view v-month';
     el.innerHTML = monthHTML();
     const c = el.querySelector('.mv-scroll');
+    if (!mq.matches) fitMonth(c, monthRowH());
     const kept = !!keep && scrollToDay(c, keep.key, keep.off, '.mv-week');
     if (S.jump || !kept) {
       const row = c.querySelector(`.mv-week[data-date="${dayKey(startOfWeek(startOfMonth(S.cursor)))}"]`);
@@ -639,7 +640,7 @@ function chipHTML(e, filled = false) {
   if (filled || e.allDay) {
     return `<button class="chip fill" data-id="${esc(e.id)}" style="--c:${c}">${esc(e.title)}</button>`;
   }
-  return `<button class="chip" data-id="${esc(e.id)}" style="--c:${c}"><i></i><span class="ct">${fmtTime(e.start).replace(':00', '')}</span> ${esc(e.title)}</button>`;
+  return `<button class="chip" data-id="${esc(e.id)}" style="--c:${c}"><span class="ct"><i></i>&#8288;${fmtTime(e.start).replace(':00', '')}</span><span class="tt">${esc(e.title)}</span></button>`;
 }
 
 /** 월 보기 한 주 줄 높이: 화면에 다섯 주가 보이게 */
@@ -648,13 +649,40 @@ function monthRowH() {
   return Math.max(92, Math.floor(h / 5));
 }
 
+/** 월 보기 칸마다 칩 높이를 재서 줄 높이(--wh) 안에 들어가는 만큼만 남기고 나머지는 「+N개 더」로.
+ *  첫 일정 하나는 늘 다 보이게: 그것조차 안 들어가면 그 주 줄을 늘린다. 읽기를 먼저 다 하고 고친다. */
+function fitMonth(root, rowH) {
+  const MORE = 17; // 「+N개 더」 16px + 사이 1px
+  const plan = [];
+  for (const cell of root.querySelectorAll('.mv-cell')) {
+    const chips = cell.querySelectorAll('.chip');
+    if (!chips.length) continue;
+    const top = cell.offsetTop;
+    const limit = rowH - 3; // 아래 여백 2px + 테두리 1px
+    const bottoms = [...chips].map((x) => x.offsetTop + x.offsetHeight - top);
+    if (bottoms[bottoms.length - 1] <= limit) continue;
+    const n = Math.max(1, bottoms.findIndex((b) => b + MORE > limit));
+    const more = n < chips.length;
+    plan.push({ cell, chips, n, more, need: bottoms[n - 1] + (more ? MORE : 0) + 3 });
+  }
+  const grow = new Map();
+  for (const { cell, chips, n, more, need } of plan) {
+    for (let i = n; i < chips.length; i++) chips[i].remove();
+    const p = P(fromDayKey(cell.dataset.day));
+    const total = chips.length;
+    if (more) cell.insertAdjacentHTML('beforeend', `<button class="more" data-more="${cell.dataset.day}" aria-label="${p.m + 1}월 ${p.d}일 일정 ${total}개 모두 보기">+${total - n}개 더</button>`);
+    if (need > rowH) grow.set(cell.parentElement, Math.max(grow.get(cell.parentElement) || 0, need));
+  }
+  grow.forEach((h, week) => { week.style.height = `${Math.ceil(h)}px`; });
+}
+
 function monthHTML() {
   const [gs, ge] = viewRange('month');
   const cur = startOfMonth(S.cursor);
   const today = startOfDay(Date.now());
   const rowH = monthRowH();
-  // 날짜(26px)·여백을 빼고 칩(19px)이 들어가는 만큼만, 넘치면 마지막 줄을 「+N개 더」로
-  const fit = mq.matches ? 0 : Math.max(1, Math.floor((rowH - 32) / 19));
+  // 제목이 여러 줄로 감기므로 몇 개가 들어갈지는 그린 뒤 fitMonth 가 재서 정한다
+  const fit = mq.matches ? 0 : Infinity;
   let rows = '';
   for (let w = gs; w < ge; w += WEEK) {
     let cells = '';

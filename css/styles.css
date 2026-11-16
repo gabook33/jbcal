@@ -275,8 +275,13 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .chip:hover { background: var(--line-soft); }
 .chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex: none; }
-.chip .ct { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.chip .ct { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; display: inline-flex; align-items: center; gap: 4px; }
 .chip.fill { background: color-mix(in srgb, var(--c) 20%, var(--panel)); color: color-mix(in srgb, var(--c) 45%, var(--text)); font-weight: 600; display: block; text-overflow: ellipsis; }
+/* 월 보기: 제목을 자르지 않고 다음 줄로 감는다. 점·시각은 한 덩어리로 첫 줄 앞에 둔다 */
+.mv-cell .chip { display: block; flex: none; white-space: normal; padding: 1px 5px; word-break: keep-all; overflow-wrap: break-word; }
+/* 시각은 한 줄로 두되, 칸이 시각보다 좁으면 「오전」 뒤에서만 꺾는다 */
+.mv-cell .chip .ct { display: inline; margin-right: 4px; }
+.mv-cell .chip .ct i { display: inline-block; vertical-align: middle; margin: -2px 4px 0 0; }
 
 /* ---------- 월 보기 ---------- */
 .mv { display: flex; flex-direction: column; height: 100%; }
