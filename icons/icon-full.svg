@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- JB's 캘린더 앱 아이콘(모서리 없는 전체 채움판): 날짜 카드 위 「JB」 모노그램, 붉은 점은 '오늘' 표시 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2c33"/>
+      <stop offset="1" stop-color="#17181d"/>
+    </linearGradient>
+    <linearGradient id="dot" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6a5c"/>
+      <stop offset="1" stop-color="#e0362f"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <g transform="translate(256 262) scale(.84) translate(-256 -262)">
+  <!-- 주간 날짜 줄: 7칸 중 오늘 칸만 붉게 -->
+  <g fill="#ffffff" fill-opacity=".22">
+    <circle cx="136" cy="112" r="9"/><circle cx="176" cy="112" r="9"/><circle cx="216" cy="112" r="9"/>
+    <circle cx="296" cy="112" r="9"/><circle cx="336" cy="112" r="9"/><circle cx="376" cy="112" r="9"/>
+  </g>
+  <circle cx="256" cy="112" r="15" fill="url(#dot)"/>
+  <!-- J -->
+  <path d="M218 178 V318 A62 62 0 0 1 94 318" fill="none" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- B -->
+  <path d="M282 178 V402 M282 178 H344 A50 50 0 0 1 344 278 H282 M282 278 H354 A62 62 0 0 1 354 402 H282"
+        fill="none" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 아포스트로피(JB's) = 붉은 점 -->
+  <circle cx="440" cy="196" r="22" fill="url(#dot)"/>
+  </g>
+</svg>
