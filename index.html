@@ -154,6 +154,18 @@
           <span>종료</span>
           <input type="date" name="eDate" required><input type="time" name="eTime" step="300">
         </div>
+        <label class="row">알림
+          <select name="reminder">
+            <option value="none">없음</option>
+            <option value="default">기본</option>
+            <option value="5">5분 전</option>
+            <option value="10">10분 전</option>
+            <option value="15">15분 전</option>
+            <option value="30">30분 전</option>
+            <option value="60">1시간 전</option>
+            <option value="1440">1일 전</option>
+          </select>
+        </label>
       </div>
       <div class="ed-group">
         <label class="row">장소 <input name="location" placeholder="장소 추가"></label>

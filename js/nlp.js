@@ -23,7 +23,8 @@ function to24(mer, h) {
   return h >= 1 && h <= 6 ? h + 12 : h;
 }
 
-export function parseQuick(input, now = Date.now()) {
+/** baseDay: 날짜 말이 없을 때 쓸 날(달력에서 고른 날). 없으면 오늘. 「내일」 같은 말은 늘 실제 오늘 기준. */
+export function parseQuick(input, now = Date.now(), { baseDay = null } = {}) {
   let s = ` ${String(input || '').trim().replace(/\s+/g, ' ')} `;
   const out = {
     title: '', start: null, end: null, allDay: false,
@@ -136,6 +137,7 @@ export function parseQuick(input, now = Date.now()) {
   // 8) 조립
   if (startMin != null && !out.allDay) {
     out.hasTime = true;
+    if (day == null && baseDay != null) day = startOfDay(baseDay);
     if (day == null) {
       day = today;
       if (today + startMin * 60e3 < now) day += DAY; // 이미 지난 시각이면 내일로
@@ -144,7 +146,7 @@ export function parseQuick(input, now = Date.now()) {
     out.end = endMin != null ? day + endMin * 60e3 : out.start + (durMin ?? 60) * 60e3;
   } else {
     out.allDay = true;
-    if (day == null) day = today;
+    if (day == null) day = baseDay != null ? startOfDay(baseDay) : today;
     out.start = day;
     out.end = day + DAY;
   }

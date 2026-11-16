@@ -38,7 +38,23 @@ export function fromGoogle(ev, cal) {
     recurring: !!ev.recurringEventId,
     readOnly: cal.readOnly || ev.locked === true,
     link: ev.htmlLink || '',
+    ...(ev.reminders ? { reminder: reminderFromGoogle(ev.reminders) } : {}),
   };
+}
+
+/** 알림: 'default'(캘린더 기본) | 'none' | 분(팝업 1개) | 'custom'(앱에서 못 고치는 설정: 그대로 둔다) */
+export function reminderFromGoogle(r) {
+  if (!r || r.useDefault) return 'default';
+  const o = r.overrides || [];
+  if (!o.length) return 'none';
+  if (o.length === 1 && o[0].method === 'popup') return o[0].minutes;
+  return 'custom';
+}
+export function reminderToGoogle(v) {
+  if (v === 'default') return { useDefault: true };
+  if (v === 'none') return { useDefault: false, overrides: [] };
+  if (Number.isFinite(v)) return { useDefault: false, overrides: [{ method: 'popup', minutes: v }] };
+  return undefined; // undefined·'custom': 보내지 않으면 구글에 있던 알림이 그대로 남는다
 }
 
 export function toGoogle(e) {
@@ -54,7 +70,9 @@ export function toGoogle(e) {
     body.start = { dateTime: rfc3339(e.start), timeZone: TZ };
     body.end = { dateTime: rfc3339(e.end), timeZone: TZ };
   }
-  // reminders를 보내지 않으면 구글 캘린더의 기본 알림이 그대로 적용된다.
+  // reminders를 보내지 않으면 새 일정은 캘린더 기본 알림, 고칠 때는 원래 알림이 그대로 남는다.
+  const reminders = reminderToGoogle(e.reminder);
+  if (reminders) body.reminders = reminders;
   return body;
 }
 

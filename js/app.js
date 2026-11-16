@@ -46,6 +46,7 @@ const S = {
   mvWeeks: 0,
   mcFrom: null, // 미니 달력 연속 스크롤이 시작하는 주
   mcWeeks: 0,
+  selDay: null, // 사용자가 눌러 고른 날(0시). 빠른 입력에 날짜 말이 없으면 이 날에 넣는다. null 이면 오늘
 };
 S.miniMonth = startOfMonth(S.cursor);
 
@@ -210,7 +211,7 @@ function miniHTML() {
   anchorMini();
   const mp = P(S.miniMonth);
   const today = startOfDay(Date.now());
-  const sel = startOfDay(S.cursor);
+  const sel = S.selDay;
   const [vs, ve] = viewRange();
   const view = effView();
   let rows = '';
@@ -597,7 +598,7 @@ function timeGridHTML(days) {
   const n = days.length;
   const head = days.map((d) => {
     const p = P(d);
-    const cls = ['tg-dh', d === today && 'today', p.dow === 0 && 'sun', p.dow === 6 && 'sat'].filter(Boolean).join(' ');
+    const cls = ['tg-dh', d === today && 'today', d === S.selDay && 'sel', p.dow === 0 && 'sun', p.dow === 6 && 'sat'].filter(Boolean).join(' ');
     return `<button class="${cls}" data-day="${dayKey(d)}"><span class="dow">${WD[p.dow]}</span><span class="dnum">${p.d}</span></button>`;
   }).join('');
   const allday = days.map((d) => {
@@ -626,7 +627,7 @@ function timeGridHTML(days) {
     }).join('');
     const nowLine = d === today
       ? `<div class="now-line" style="top:${((now - d) / 3600e3) * HH}px"></div>` : '';
-    return `<div class="tg-col${d === today ? ' today' : ''}" data-day="${dayKey(d)}">${blocks}${nowLine}</div>`;
+    return `<div class="tg-col${d === today ? ' today' : ''}${d === S.selDay ? ' sel' : ''}" data-day="${dayKey(d)}">${blocks}${nowLine}</div>`;
   }).join('');
   return `<div class="tg" style="--n:${n};--hh:${HH}px">
     <div class="tg-row tg-head"><div class="tg-gutter"></div>${head}</div>
@@ -690,7 +691,7 @@ function monthHTML() {
       const p = P(d);
       const evs = visibleEvents(d, d + DAY);
       const holiday = evs.some(isHoliday);
-      const cls = ['mv-cell', startOfMonth(d) !== cur && 'other', d === today && 'today', (p.dow === 0 || holiday) && 'is-sun', p.dow === 6 && 'is-sat'].filter(Boolean).join(' ');
+      const cls = ['mv-cell', startOfMonth(d) !== cur && 'other', d === today && 'today', d === S.selDay && 'sel', (p.dow === 0 || holiday) && 'is-sun', p.dow === 6 && 'is-sat'].filter(Boolean).join(' ');
       const maxChips = evs.length > fit ? Math.max(fit - 1, 0) : fit;
       const shown = evs.slice(0, maxChips).map((e) => chipHTML(e)).join('');
       const more = evs.length > maxChips
@@ -853,9 +854,17 @@ function matchCal(hint) {
     || defaultCal();
 }
 
+/** 날짜 말이 없는 빠른 입력이 들어갈 날: 고른 날(없으면 오늘) */
+const parseQ = (v) => parseQuick(v, Date.now(), { baseDay: S.selDay });
+
 function describe(r) {
   const row = (cls, label, html) => `<span class="pv-row ${cls}"><em>${label}</em>${html}</span>`;
-  const parts = [row('pv-date', '날짜', esc(fmtDate(r.start)))];
+  // 날짜 말이 없으면 어느 날에 들어가는지(고른 날·오늘) 같이 보여 준다
+  const today = startOfDay(Date.now());
+  const why = r.hasDate ? ''
+    : S.selDay != null ? (S.selDay === today ? '고른 날 · 오늘' : '고른 날')
+      : startOfDay(r.start) === today ? '오늘' : '';
+  const parts = [row('pv-date', '날짜', `${esc(fmtDate(r.start, P(r.start).y !== P(today).y))}${why ? ` <small class="pv-why">${why}</small>` : ''}`)];
   if (r.allDay) {
     const days = Math.round((r.end - r.start) / DAY);
     parts.push(row('pv-time', '시간', `종일${days > 1 ? ` · ${days}일` : ''}`));
@@ -874,7 +883,7 @@ const sheetMode = () => mq.matches && document.body.classList.contains('quick-op
 quick.addEventListener('input', () => {
   const v = quick.value.trim();
   if (!v || S.needsLogin) { pvEl.hidden = true; return; }
-  pvEl.innerHTML = describe(parseQuick(v));
+  pvEl.innerHTML = describe(parseQ(v));
   pvEl.hidden = false;
 });
 quick.addEventListener('keydown', (ev) => {
@@ -917,7 +926,7 @@ $('#quickForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const v = quick.value.trim();
   if (!v || S.needsLogin) return;
-  const r = parseQuick(v);
+  const r = parseQ(v);
   const cal = matchCal(r.calendarHint);
   if (!cal) { toast('일정을 넣을 수 있는 캘린더가 없습니다'); return; }
   const saved = await guarded(() => createEvent({
@@ -952,7 +961,7 @@ const form = $('#editorForm');
 let editing = null; // {event, isNew}
 
 function openEditor(e, isNew = false) {
-  editing = { event: e, isNew };
+  editing = { event: e, isNew, reminder: String(e.reminder ?? 'default') };
   const ro = !!e.readOnly;
   const cals = ro ? S.cals.filter((c) => c.id === e.calendarId) : writableCals();
   form.calendarId.innerHTML = cals.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
@@ -965,6 +974,7 @@ function openEditor(e, isNew = false) {
   form.eTime.value = hm(e.end);
   form.location.value = e.location || '';
   form.note.value = e.note || '';
+  setReminderField(e.reminder);
   [...form.elements].forEach((el) => { if (el.name) el.disabled = ro; });
   $('#edSave').hidden = ro;
   $('#edDelete').hidden = isNew || ro;
@@ -977,8 +987,24 @@ function openEditor(e, isNew = false) {
   if (e.link) link.href = e.link;
   syncEditor();
   dlg.showModal();
+  edOpenedAt = Date.now();
   if (isNew) form.title.focus();
 }
+
+/** 알림 고르기: 목록에 없는 값(20분 전·여러 알림)은 그 일정에만 보기 하나를 더 붙인다 */
+function setReminderField(v = 'default') {
+  const sel = form.reminder;
+  sel.querySelectorAll('[data-extra]').forEach((o) => o.remove());
+  const val = String(v);
+  if (![...sel.options].some((o) => o.value === val)) {
+    const label = v === 'custom' ? '구글에 설정된 알림 그대로'
+      : v >= 1440 && v % 1440 === 0 ? `${v / 1440}일 전`
+        : v >= 60 && v % 60 === 0 ? `${v / 60}시간 전` : `${v}분 전`;
+    sel.insertAdjacentHTML('beforeend', `<option value="${esc(val)}" data-extra>${esc(label)}</option>`);
+  }
+  sel.value = val;
+}
+const reminderOf = (v) => (/^\d+$/.test(v) ? +v : v);
 
 function syncEditor() {
   const ad = form.allDay.checked;
@@ -998,7 +1024,11 @@ form.sDate.addEventListener('change', () => {
   if (curEnd < ns) form.eDate.value = dayKey(curEnd + shift);
 });
 $('#edCancel').addEventListener('click', () => dlg.close());
-dlg.addEventListener('click', (ev) => { if (ev.target === dlg) dlg.close(); });
+// 바깥(배경) 클릭으로 닫기. 단, 일정을 더블클릭해 연 직후의 두 번째 클릭은 무시한다
+let edOpenedAt = 0;
+dlg.addEventListener('click', (ev) => {
+  if (ev.target === dlg && ev.detail < 2 && Date.now() - edOpenedAt > 400) dlg.close();
+});
 
 form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -1021,6 +1051,8 @@ form.addEventListener('submit', async (ev) => {
     allDay, start, end,
     location: form.location.value.trim(),
     note: form.note.value,
+    // 알림을 안 건드렸으면 원래 값(없으면 보내지 않아 구글 쪽 그대로)
+    reminder: form.reminder.value === editing.reminder ? orig.reminder : reminderOf(form.reminder.value),
   };
   $('#edSave').disabled = true;
   const saved = await guarded(() => (isNew ? createEvent(e) : updateEvent(e, orig.calendarId)));
@@ -1072,22 +1104,45 @@ function go(dir) {
   if (view === 'month') S.cursor = addMonths(c, dir);
   else if (view === 'week') S.cursor = c + dir * (mq.matches ? 3 : 7) * DAY;
   else if (view === 'list') S.cursor = startOfDay(c) + dir * 7 * DAY;
-  else S.cursor = c + dir * DAY;
+  else { S.cursor = c + dir * DAY; S.selDay = startOfDay(S.cursor); syncQuickHint(); } // 일 보기: 보이는 날 = 고른 날
   S.miniMonth = startOfMonth(S.cursor);
   S.jump = true;
   render();
 }
 function goToday() {
   S.cursor = startOfDay(Date.now());
+  S.selDay = null;
+  syncQuickHint();
   S.miniMonth = startOfMonth(S.cursor);
   S.jump = true;
   render();
 }
 function selectDay(d) {
   S.cursor = d;
+  S.selDay = d;
   if (P(d).m !== P(S.miniMonth).m) S.miniMonth = startOfMonth(d);
   S.jump = true;
+  syncQuickHint();
   render();
+}
+
+/** 날짜 고르기: 화면을 다시 그리지 않고 표시만 바꾼다.
+ *  (다시 그리면 두 번째 클릭이 새 칸에 떨어져 브라우저가 더블클릭으로 치지 않는다) */
+function setSel(d) {
+  S.selDay = d;
+  const key = d == null ? '' : dayKey(d);
+  document.querySelectorAll('.mv-cell[data-day], .mc-day[data-day], .tg-dh[data-day], .tg-col[data-day]')
+    .forEach((el) => el.classList.toggle('sel', el.dataset.day === key));
+  syncQuickHint();
+}
+
+/** 빠른 입력 안내 글: 고른 날이 오늘이 아니면 그 날짜를 보여 준다 */
+const QUICK_PH = quick.placeholder;
+function syncQuickHint() {
+  const d = S.selDay;
+  if (d == null || d === startOfDay(Date.now())) quick.placeholder = QUICK_PH;
+  else { const p = P(d); quick.placeholder = `빠른 입력 · ${p.m + 1}월 ${p.d}일 (${WD[p.dow]}): 회의 오후 3시 @본관`; }
+  if (quick.value.trim()) quick.dispatchEvent(new Event('input'));
 }
 
 /** 휴대폰 아래 탭 */
@@ -1153,7 +1208,7 @@ document.addEventListener('click', async (ev) => {
   }
   if (act === 'demo') { localStorage.setItem(K_MODE, 'demo'); location.reload(); return; }
   if (act === 'close-pop') { closeDayPop(); return; }
-  if (act === 'day-view') { const k = t.closest('[data-goto]').dataset.goto; closeDayPop(); S.cursor = fromDayKey(k); S.miniMonth = startOfMonth(S.cursor); setView('day'); return; }
+  if (act === 'day-view') { const k = t.closest('[data-goto]').dataset.goto; closeDayPop(); S.cursor = fromDayKey(k); S.selDay = S.cursor; syncQuickHint(); S.miniMonth = startOfMonth(S.cursor); setView('day'); return; }
   const pop = $('#dayPop');
   if (pop && !t.closest('#dayPop')) closeDayPop();
   const moreBtn = t.closest('[data-more]');
@@ -1181,24 +1236,34 @@ document.addEventListener('click', async (ev) => {
   if (dayEl.classList.contains('mc-day') || dayEl.classList.contains('tk-day')) {
     selectDay(d);
   } else if (dayEl.classList.contains('tg-dh')) {
-    S.cursor = d; setView('day');
+    // 한 번 누르면 고르기, 두 번 누르면 그날 일 보기
+    if (ev.detail >= 2) { S.cursor = d; setSel(d); setView('day'); } else setSel(d);
   } else if (dayEl.classList.contains('mv-cell')) {
-    if (mq.matches) { S.cursor = d; setView('day'); return; }
-    S.cursor = d;
-    render();
+    if (mq.matches) { S.cursor = d; S.selDay = d; setView('day'); return; }
+    setSel(d);
+    // 두 번째 클릭(ev.detail 2)에서 바로 새 일정: dblclick 이 안 오는 경우(그사이 화면 갱신 등)도 열린다
+    if (ev.detail >= 2) newOnDay(d);
   } else if (dayEl.classList.contains('tg-col')) {
     // 빈 시간 칸 클릭 → 30분 단위로 새 일정
+    setSel(d);
     const y = ev.clientY - dayEl.getBoundingClientRect().top;
     const min = Math.floor((y / HH) * 2) * 30;
     newEventAt(d + min * 60e3);
   } else if (dayEl.classList.contains('tg-ad')) {
+    setSel(d);
     newEventAt(d, true);
   }
 });
 
+/** 월 보기 빈 곳 더블클릭 → 그날 오전 9시 새 일정 (click 의 detail 2 와 dblclick 중 먼저 온 쪽 한 번만) */
+function newOnDay(d) {
+  if (dlg.open) return;
+  newEventAt(d + 9 * 3600e3);
+}
 document.addEventListener('dblclick', (ev) => {
-  const cell = ev.target.closest('.mv-cell');
-  if (cell && !ev.target.closest('[data-id], [data-more]')) newEventAt(fromDayKey(cell.dataset.day) + 9 * 3600e3);
+  const cell = ev.target.closest?.('.mv-cell');
+  if (!cell || mq.matches || ev.target.closest('[data-id], [data-more]')) return;
+  newOnDay(fromDayKey(cell.dataset.day));
 });
 
 document.addEventListener('change', (ev) => {

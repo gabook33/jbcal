@@ -111,6 +111,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .pv-row { color: var(--muted); }
 .pv-row em { display: none; }
 .quick-preview .pv-date { color: var(--text); font-weight: 600; }
+.pv-why { font-size: 11px; font-weight: 700; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 1px 6px; border-radius: 5px; margin-left: 4px; }
 .pv-cal span { display: inline-flex; align-items: center; gap: 5px; }
 .pv-cal i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
 .quick-preview kbd { margin-left: auto; font: 600 11px ui-monospace, monospace; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
@@ -148,6 +149,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .sat { color: var(--sat); }
 .mc-day.today span { color: var(--accent); font-weight: 800; }
 .mc-day.sel span { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.mc-day.sel { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .side-h { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 22px 4px 8px; font-weight: 700; }
 
 /* ---------- 다가오는 일정 (데스크톱 왼쪽, 짧은 목록) ---------- */
@@ -235,6 +237,9 @@ input, select, textarea { font: inherit; color: inherit; }
 .tg-dh.sat .dow, .tg-dh.sat .dnum { color: var(--sat); }
 .tg-dh.today .dnum { background: var(--accent); color: var(--accent-ink); }
 .tg-dh.today .dow { color: var(--accent); font-weight: 700; }
+/* 고른 날: 머리글·시간 칸·월 칸 모두 같은 테두리 상자 */
+.tg-dh { border-radius: 8px; user-select: none; -webkit-user-select: none; }
+.tg-dh.sel { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .tg-allday { border-bottom: 1px solid var(--line); min-height: 30px; }
 .tg-ad { border-left: 1px solid var(--line-soft); padding: 3px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tg-scroll { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
@@ -247,6 +252,7 @@ input, select, textarea { font: inherit; color: inherit; }
   background-image: repeating-linear-gradient(to bottom, var(--line-soft) 0 1px, transparent 1px var(--hh));
 }
 .tg-col.today { background-color: color-mix(in srgb, var(--accent) 3%, transparent); }
+.tg-col.sel { background-color: color-mix(in srgb, var(--accent) 6%, transparent); }
 .tg-ev {
   position: absolute; z-index: 1; display: flex; flex-direction: column; align-items: flex-start; overflow: hidden;
   text-align: left; padding: 3px 7px; border-radius: 6px; font-size: 12px; line-height: 1.3;
@@ -303,6 +309,9 @@ input, select, textarea { font: inherit; color: inherit; }
 .mv-date { transition: opacity .2s; }
 .mv-cell.is-sun .mv-date { color: var(--sun); } .mv-cell.is-sat .mv-date { color: var(--sat); }
 .mv-cell.today .mv-date { background: var(--accent); color: var(--accent-ink); }
+/* 고른 날: 칸 전체를 강조색 테두리 상자로. 더블클릭 때 글자가 파랗게 잡히지 않게 */
+.mv-cell { user-select: none; -webkit-user-select: none; }
+.mv-cell.sel { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .more { align-self: flex-start; font-size: 11px; line-height: 16px; color: var(--muted); padding: 0 6px; border-radius: 5px; font-weight: 600; flex: none; }
 .more:hover { background: var(--line-soft); color: var(--text); }
 
