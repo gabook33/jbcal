@@ -38,6 +38,10 @@ export function fromGoogle(ev, cal) {
     recurring: !!ev.recurringEventId,
     readOnly: cal.readOnly || ev.locked === true,
     link: ev.htmlLink || '',
+    // 오른쪽 클릭 메뉴(색상·보기 방식·공개 범위)용. 구글에 값이 있을 때만 둔다
+    ...(ev.colorId ? { colorId: ev.colorId } : {}),
+    ...(ev.transparency === 'transparent' ? { free: true } : {}),
+    ...(ev.visibility && ev.visibility !== 'default' ? { visibility: ev.visibility } : {}),
     ...(ev.reminders ? { reminder: reminderFromGoogle(ev.reminders) } : {}),
   };
 }
@@ -73,6 +77,10 @@ export function toGoogle(e) {
   // reminders를 보내지 않으면 새 일정은 캘린더 기본 알림, 고칠 때는 원래 알림이 그대로 남는다.
   const reminders = reminderToGoogle(e.reminder);
   if (reminders) body.reminders = reminders;
+  // 색(colorId null = 캘린더 색으로), 보기 방식(바쁨/한가함), 공개 범위: 앱에서 정했을 때만 보낸다
+  if (e.colorId !== undefined) body.colorId = e.colorId;
+  if (e.free !== undefined) body.transparency = e.free ? 'transparent' : 'opaque';
+  if (e.visibility !== undefined) body.visibility = e.visibility;
   return body;
 }
 
