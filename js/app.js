@@ -4,10 +4,12 @@ import {
   fmtTime, fmtHourLabel, fmtDate, fmtDayHeading, hm, fromInputs, sameDay,
 } from './time.js';
 import { parseQuick } from './nlp.js';
-import { demoStore, resetDemo } from './demo.js';
+import { demoStore, demoTasks, resetDemo } from './demo.js';
 import {
   googleStore, getToken, wasLinked, beginLogin, consumeRedirect, logout, AuthError, EVENT_COLORS,
+  googleTasks, hasTasksScope, ScopeError, ApiDisabledError,
 } from './gcal.js';
+import { tasksForDay, groupTasks } from './tasks.js';
 
 /* ---------- 준비 ---------- */
 
@@ -22,6 +24,10 @@ const K_MODE = 'nanal.mode';
 const K_TK = 'nanal.tickerOpen';
 const K_WS = 'nanal.weekStart'; // 데스크톱 주 시작 요일: '1' 월요일(기본) / '0' 일요일
 const K_HIDEV = 'nanal.hiddenEvents'; // 오른쪽 클릭 「숨기기」로 이 기기에서만 감춘 일정
+const K_SBTAB = 'nanal.sbTab'; // 데스크톱 왼쪽 목록: 'ev' 날짜별 일정(기본) / 'tasks' 할 일
+const K_TLIST = 'nanal.taskList'; // 새 할 일을 넣을 목록(마지막에 고른 것)
+const K_ASK = 'nanal.tasksAskLater'; // 할 일 권한 안내 띠에서 「나중에」를 눌렀음
+const TASKS_KEY = '__tasks'; // 캘린더 켜기·끄기 목록에서 「할 일」 줄(S.hidden 에 같이 저장)
 
 if (params.has('reset-demo')) resetDemo();
 if (params.get('demo') === '1') localStorage.setItem(K_MODE, 'demo');
@@ -53,6 +59,15 @@ const S = {
   hiddenEv: new Set(JSON.parse(localStorage.getItem(K_HIDEV) || '[]')),
   picked: null, // 오른쪽 클릭으로 고른 일정 id(채운 칩으로 표시)
   clip: null, // 복사·잘라내기한 일정 {e, cut}
+  // 할 일(Google Tasks)
+  tStore: useGoogle ? googleTasks : demoTasks,
+  tasks: [],
+  taskLists: [],
+  tasksState: 'idle', // idle | ok | need-scope(권한 다시 동의) | disabled(Tasks API 꺼짐) | error
+  tasksAt: 0,
+  tasksErr: '',
+  showDone: false,
+  sbTab: localStorage.getItem(K_SBTAB) === 'tasks' ? 'tasks' : 'ev',
 };
 // 옛 「목록」 보기 값은 데스크톱에서 월 보기로(목록은 L 키로 계속 쓸 수 있다)
 
@@ -169,6 +184,33 @@ function visibleEvents(from, to) {
     .sort((a, b) => (b.allDay - a.allDay) || (a.start - b.start) || (b.end - a.end));
 }
 
+/* ---------- 할 일 (Google Tasks) 데이터 ---------- */
+
+/** 할 일 불러오기. 권한이 없거나(이전에 연결한 기기) Tasks API 가 꺼져 있으면 상태만 바꾸고 일정 화면은 그대로 둔다 */
+async function ensureTasks(force = false) {
+  if (S.needsLogin) return;
+  if (useGoogle && !hasTasksScope()) { S.tasksState = 'need-scope'; return; }
+  if (!force && S.tasksAt && (S.tasksState === 'ok' || Date.now() - S.tasksAt < 60e3)) return;
+  S.tasksAt = Date.now();
+  try {
+    const lists = await S.tStore.lists();
+    const tasks = await S.tStore.tasks(lists);
+    S.taskLists = lists;
+    S.tasks = tasks;
+    S.tasksState = 'ok';
+  } catch (err) {
+    if (err instanceof ScopeError) S.tasksState = 'need-scope';
+    else if (err instanceof ApiDisabledError) S.tasksState = 'disabled';
+    else if (!(err instanceof AuthError) && S.tasksState !== 'ok') { S.tasksState = 'error'; S.tasksErr = err.message || ''; }
+    console.warn('할 일:', err.message);
+  }
+}
+/** 할 일 색: 기본 캘린더 색(구글 할 일에는 색이 없다) */
+const taskColor = () => defaultCal()?.color || '#3a87f2';
+const tasksShown = () => S.tasksState === 'ok' && !S.hidden.has(TASKS_KEY);
+/** 날짜별 목록에 넣을 그날 할 일(오늘 칸에는 마감 지난 것 포함) */
+const dayTasks = (d, today = startOfDay(Date.now())) => (tasksShown() ? tasksForDay(S.tasks, d, today) : []);
+
 function handleError(err) {
   console.error(err);
   if (err instanceof AuthError) {
@@ -186,7 +228,7 @@ async function render({ refetch = false } = {}) {
   const seq = ++renderSeq;
   document.body.classList.toggle('needs-login', S.needsLogin);
   if (S.needsLogin) { renderWelcome(); renderChrome(); return; }
-  await ensureEvents(refetch);
+  await Promise.all([ensureEvents(refetch), ensureTasks(refetch)]);
   if (seq !== renderSeq) return;
   renderChrome();
   renderMini();
@@ -194,6 +236,8 @@ async function render({ refetch = false } = {}) {
   renderUpcoming();
   renderCals();
   renderView();
+  renderTasks();
+  syncAsk();
   if (document.body.classList.contains('search-open')) runSearch();
   S.jump = false;
 }
@@ -362,8 +406,9 @@ function renderTicker() {
       const d = gs + (w * 7 + i) * DAY;
       const p = P(d);
       const evs = visibleEvents(d, d + DAY);
-      // 일정 하나에 점 하나(캘린더 색), 최대 넷
-      const dots = evs.slice(0, 4).map((e) => `<i style="background:${colorOf(e)}"></i>`).join('');
+      // 일정 하나에 점 하나(캘린더 색), 그날 마감인 안 끝낸 할 일도 점 하나씩, 최대 넷
+      const tks = tasksShown() ? S.tasks.filter((t) => t.due === d && !t.done) : [];
+      const dots = [...evs.map(colorOf), ...tks.map(taskColor)].slice(0, 4).map((c) => `<i style="background:${c}"></i>`).join('');
       const cls = [
         'tk-day',
         p.m !== mp.m && 'other',
@@ -440,13 +485,15 @@ function renderUpcoming() {
     const d = from + i * DAY;
     const p = P(d);
     const evs = visibleEvents(d, d + DAY);
-    if (!evs.length && i) continue;
+    const tks = dayTasks(d, today);
+    if (!evs.length && !tks.length && i) continue;
     const name = d === today ? '오늘' : d === today + DAY ? '내일' : `${WD[p.dow]}요일`;
     html += `<div class="ag-day sa-day${d === today ? ' today' : ''}" data-date="${dayKey(d)}">
       <h3 class="sa-h"><span><b>${name}</b> ${p.m + 1}/${p.d}</span>${wxHTML(d)}</h3>`;
-    if (!evs.length) html += '<div class="ag-empty">일정 없음</div>';
+    if (!evs.length && !tks.length) html += '<div class="ag-empty">일정 없음</div>';
     const ads = evs.filter((e) => e.allDay);
     if (ads.length) html += `<div class="sa-ads">${ads.map((e) => `<button class="ag-ev sa-ad" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">${esc(e.title)}</button>`).join('')}</div>`;
+    html += tks.map((t) => taskRowHTML(t, 'sa-task', today)).join('');
     for (const e of evs) {
       if (e.allDay) continue;
       const cls = ['ag-ev', 'sa-ev', e.id === hl && 'hl', e.end < now && 'past'].filter(Boolean).join(' ');
@@ -475,7 +522,9 @@ function listHTML(from, days) {
       (p.dow === 0 || holiday) && 'sun', p.dow === 6 && 'sat'].filter(Boolean).join(' ');
     const head = esc(fmtDayHeading(d, now)).replace(/^(오늘|내일|어제) · /, '<b>$1</b>');
     html += `<section class="${cls}" data-date="${dayKey(d)}"><h3 class="ag-h">${head}</h3>`;
-    if (!evs.length) html += '<div class="ag-empty">일정 없음</div>';
+    const tks = dayTasks(d, today);
+    if (!evs.length && !tks.length) html += '<div class="ag-empty">일정 없음</div>';
+    html += tks.map((t) => taskRowHTML(t, 'ag-task', today)).join('');
     let nowShown = d !== today;
     for (const e of evs) {
       if (!nowShown && !e.allDay && e.start > now) { html += nowLineHTML(now); nowShown = true; }
@@ -507,9 +556,11 @@ function mTimeRange(e, d) {
   // 오전/오후가 같으면 앞 시각의 오전/오후는 뺀다
   return `${ampm(s) === ampm(en) ? fmtTime(s).replace(/^오[전후] /, '') : fmtTime(s)} – ${fmtTime(en)}`;
 }
-function mEventsHTML(evs, d, now) {
+function mEventsHTML(evs, d, now, tasks = []) {
   const ads = evs.filter((e) => e.allDay);
   let html = ads.length ? `<div class="m-ads">${ads.map((e) => `<button class="ag-ev m-allday" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"><span class="ag-title">${esc(e.title)}</span></button>`).join('')}</div>` : '';
+  // 할 일: 종일 이름표 다음, 시간 일정 앞에 체크 상자 모양으로
+  html += tasks.map((t) => taskRowHTML(t, 'm-task', startOfDay(now))).join('');
   for (const e of evs) {
     if (e.allDay) continue;
     const past = e.end < now ? ' past' : '';
@@ -532,10 +583,11 @@ function mListHTML(from, days) {
   for (let i = 0; i < days; i++) {
     const d = from + i * DAY;
     const evs = visibleEvents(d, d + DAY);
-    if (!evs.length && !keep.has(d)) continue;
+    const tks = dayTasks(d, today);
+    if (!evs.length && !tks.length && !keep.has(d)) continue;
     const cls = ['ag-day', 'm-day', d === today && 'today', d < today && 'before'].filter(Boolean).join(' ');
     html += `<section class="${cls}" data-date="${dayKey(d)}"><h3 class="ag-h">${mDayLabel(d, today)}${wxHTML(d)}</h3>`;
-    html += evs.length ? mEventsHTML(evs, d, now) : '<div class="ag-empty">일정 없음</div>';
+    html += evs.length || tks.length ? mEventsHTML(evs, d, now, tks) : '<div class="ag-empty">일정 없음</div>';
     html += '</section>';
   }
   return html;
@@ -637,7 +689,13 @@ function renderCals() {
       <span class="cal-check"></span>
       <span class="cal-name">${esc(c.name)}</span>
       ${c.readOnly ? '<span class="cal-ro">읽기 전용</span>' : ''}
-    </label>`).join('') + (useGoogle ? '' : '<button class="link-btn" data-act="reset-demo">예시 일정 초기화</button>');
+    </label>`).join('')
+    // 할 일(Google Tasks)도 날짜별 목록에서 켜고 끌 수 있게
+    + (S.tasksState === 'ok' ? `<label class="cal-item tasks-item" style="--c:${taskColor()}">
+      <input type="checkbox" data-cal="${TASKS_KEY}" ${S.hidden.has(TASKS_KEY) ? '' : 'checked'}>
+      <span class="cal-check"></span><span class="cal-name">할 일</span><span class="cal-sub">Google Tasks</span>
+    </label>` : '')
+    + (useGoogle ? '' : '<button class="link-btn" data-act="reset-demo">예시 일정 초기화</button>');
   // 왼쪽 아래 「모든 캘린더 ⌄」: 켠 캘린더 수, 체크 상자는 전부 켜기/끄기
   const on = S.cals.filter((c) => !S.hidden.has(c.id)).length;
   $('#calSetLabel').textContent = on === S.cals.length ? '모든 캘린더' : on ? `캘린더 ${on}/${S.cals.length}개` : '캘린더 꺼짐';
@@ -1324,6 +1382,266 @@ function nextHour() {
   return T(p.y, p.m, p.d, p.h + 1);
 }
 
+/* ---------- 할 일 (Google Tasks) 화면 ---------- */
+
+/** 마감일 말: 오늘 / 내일 / 어제 / 11월 14일 (토) */
+function dueLabel(d, today) {
+  if (d === today) return '오늘';
+  if (d === today + DAY) return '내일';
+  if (d === today - DAY) return '어제';
+  return fmtDate(d, P(d).y !== P(today).y);
+}
+const listName = (id) => S.taskLists.find((l) => l.id === id)?.title || '';
+
+/** 할 일 한 줄: 체크 상자 + 제목(+ 마감일·목록). kind: m-task(휴대폰 목록) sa-task(데스크톱 왼쪽) ag-task(목록 보기) tp-task(할 일 화면) */
+function taskRowHTML(t, kind, today) {
+  const over = !t.done && t.due != null && t.due < today;
+  const meta = kind === 'tp-task'
+    // 할 일 화면: 「오늘」「내일」 묶음 안에서는 마감일을 다시 쓰지 않는다
+    ? [t.due != null && (t.done || t.due < today || t.due > today + DAY) ? dueLabel(t.due, today) : '', S.taskLists.length > 1 ? listName(t.listId) : ''].filter(Boolean).join(' · ')
+    : over ? `${dueLabel(t.due, today)} 마감` : '';
+  return `<div class="tsk ${kind}${t.done ? ' done' : ''}${over ? ' over' : ''}" data-task="${esc(t.id)}" role="button" tabindex="0" style="--c:${taskColor()}">
+    <button type="button" class="tsk-box" data-tcheck="${esc(t.id)}" role="checkbox" aria-checked="${t.done}" aria-label="${t.done ? '완료 취소' : '완료로 표시'}"></button>
+    <span class="tsk-title">${esc(t.title || '(제목 없음)')}</span>${meta ? `<span class="tsk-meta">${esc(meta)}</span>` : ''}
+  </div>`;
+}
+
+const TP_SECS = [['overdue', '지난 마감'], ['today', '오늘'], ['tomorrow', '내일'], ['later', '예정'], ['none', '마감일 없음']];
+function tasksPanelInner() {
+  if (S.tasksState === 'need-scope') {
+    return `<div class="tp-msg"><p>할 일(Google Tasks)을 보려면 구글 권한을 한 번 더 허용해 주세요. 캘린더 연결은 그대로입니다.</p>
+      <button type="button" class="btn primary" data-act="tasks-consent">Google 할 일 권한 허용</button></div>`;
+  }
+  if (S.tasksState === 'disabled') {
+    return `<div class="tp-msg"><p>구글 클라우드 프로젝트(jbs-calendar)에서 Google Tasks API 가 아직 꺼져 있습니다. 사용 설정 뒤 다시 시도하면 보입니다.</p>
+      <button type="button" class="btn" data-act="tasks-retry">다시 시도</button></div>`;
+  }
+  if (S.tasksState === 'error') {
+    return `<div class="tp-msg"><p>할 일을 불러오지 못했습니다. ${esc(S.tasksErr)}</p><button type="button" class="btn" data-act="tasks-retry">다시 시도</button></div>`;
+  }
+  if (S.tasksState !== 'ok') return '<div class="tp-msg"><p>할 일을 불러오는 중…</p></div>';
+  const today = startOfDay(Date.now());
+  const g = groupTasks(S.tasks, today);
+  let html = '';
+  for (const [k, label] of TP_SECS) {
+    if (!g[k].length) continue;
+    html += `<section class="tp-sec tp-${k}"><h3 class="tp-h">${label}<span>${g[k].length}</span></h3>${g[k].map((t) => taskRowHTML(t, 'tp-task', today)).join('')}</section>`;
+  }
+  if (!html) html = '<div class="tp-msg"><p>남은 할 일이 없습니다.</p></div>';
+  if (g.doneTotal) {
+    html += `<section class="tp-sec tp-done"><h3 class="tp-h"><button type="button" class="tp-more" data-act="tasks-done-toggle">완료됨 ${g.doneTotal}개 ${S.showDone ? '숨기기' : '보기'}</button></h3>
+      ${S.showDone ? g.done.map((t) => taskRowHTML(t, 'tp-task', today)).join('') : ''}</section>`;
+  }
+  return html;
+}
+
+/** 할 일 화면(휴대폰 시트·데스크톱 왼쪽)을 그린다. 입력칸은 처음 한 번만 만들어 쓰던 글자가 지워지지 않게 한다 */
+function renderTasks() {
+  const lists = S.taskLists.map((l) => `<option value="${esc(l.id)}">${esc(l.title)}</option>`).join('');
+  const pick = S.taskLists.some((l) => l.id === localStorage.getItem(K_TLIST)) ? localStorage.getItem(K_TLIST) : S.taskLists[0]?.id;
+  document.querySelectorAll('.tp-host').forEach((host) => {
+    if (!host.querySelector('.tp-add')) {
+      host.innerHTML = `<form class="tp-add" autocomplete="off">
+          <span class="tsk-box" aria-hidden="true"></span>
+          <input name="t" type="text" enterkeyhint="done" placeholder="새 할 일 · 예) 내일 보고서 제출" aria-label="새 할 일">
+          <select name="list" aria-label="넣을 목록"></select>
+        </form><div class="tp-list"></div>`;
+    }
+    const sel = host.querySelector('select[name=list]');
+    if (sel.dataset.sig !== lists) { sel.innerHTML = lists; sel.dataset.sig = lists; }
+    if (pick && sel.value !== pick) sel.value = pick;
+    sel.hidden = S.taskLists.length < 2;
+    host.querySelector('.tp-add').hidden = S.tasksState !== 'ok';
+    host.querySelector('.tp-list').innerHTML = tasksPanelInner();
+  });
+  // 데스크톱 왼쪽 「일정 | 할 일」
+  $('#sbEvTab').classList.toggle('on', S.sbTab === 'ev');
+  $('#sbTasksTab').classList.toggle('on', S.sbTab === 'tasks');
+  $('#sbEvTab').setAttribute('aria-selected', String(S.sbTab === 'ev'));
+  $('#sbTasksTab').setAttribute('aria-selected', String(S.sbTab === 'tasks'));
+  $('#sidebar').classList.toggle('tasks-tab', S.sbTab === 'tasks');
+  $('#sbTasks').hidden = S.sbTab !== 'tasks';
+}
+
+/** 다시 동의 안내 띠: 할 일 권한이 없는 기존 연결(구글 모드)에서, 「나중에」를 누르기 전까지 */
+function syncAsk() {
+  $('#askBanner').hidden = !(useGoogle && !S.needsLogin && S.tasksState === 'need-scope' && localStorage.getItem(K_ASK) !== '1');
+}
+
+/** 할 일 저장 도우미: 권한·API 문제면 화면 상태도 바꾼다 */
+async function guardedTask(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    console.warn('할 일 저장:', err.message);
+    if (err instanceof ScopeError) { S.tasksState = 'need-scope'; render(); toast('할 일 권한을 한 번 더 허용해 주세요'); }
+    else if (err instanceof ApiDisabledError) { S.tasksState = 'disabled'; render(); toast('Google Tasks API 가 꺼져 있습니다'); }
+    else if (err instanceof AuthError) { handleError(err); toast('로그인이 필요합니다'); }
+    else toast('할 일을 저장하지 못했습니다');
+    return null;
+  }
+}
+const putTask = (t) => { S.tasks = S.tasks.some((x) => x.id === t.id) ? S.tasks.map((x) => (x.id === t.id ? t : x)) : [...S.tasks, t]; };
+
+async function toggleTask(id) {
+  const t = S.tasks.find((x) => x.id === id);
+  if (!t) return;
+  const next = { ...t, done: !t.done, completed: t.done ? null : Date.now() };
+  putTask(next); // 먼저 화면에 반영하고, 실패하면 되돌린다
+  render();
+  const saved = await guardedTask(() => S.tStore.update(next, t.listId));
+  putTask(saved || t);
+  render();
+  if (saved && saved.done) toast(`‘${t.title}’ 완료`, { label: '되돌리기', run: () => toggleTask(id) });
+}
+
+async function addTask(text, listId) {
+  // 「내일 보고서 제출」 → 마감일 내일. 날짜·시각 말이 없으면 마감일 없음
+  const r = parseQuick(text, Date.now(), { baseDay: null });
+  let title = text;
+  let due = null;
+  if (r.hasDate || r.hasTime) {
+    title = [r.title, r.location && `@${r.location}`].filter(Boolean).join(' ') || text;
+    due = startOfDay(r.start);
+  }
+  const saved = await guardedTask(() => S.tStore.create({ listId, title, notes: '', due, done: false }));
+  if (!saved) return null;
+  putTask(saved);
+  render();
+  toast(`할 일 추가 · ${saved.title}${due != null ? ` · ${dueLabel(due, startOfDay(Date.now()))}` : ''}`, {
+    label: '실행 취소',
+    run: async () => { await guardedTask(() => S.tStore.remove(saved)); S.tasks = S.tasks.filter((x) => x.id !== saved.id); render(); },
+  });
+  return saved;
+}
+document.addEventListener('submit', async (ev) => {
+  const f = ev.target.closest?.('.tp-add');
+  if (!f) return;
+  ev.preventDefault();
+  const v = f.t.value.trim();
+  if (!v || S.tasksState !== 'ok') return;
+  const listId = f.list.value || S.taskLists[0]?.id;
+  localStorage.setItem(K_TLIST, listId);
+  f.t.value = '';
+  if (!(await addTask(v, listId))) f.t.value = v;
+});
+document.addEventListener('change', (ev) => {
+  if (ev.target.matches?.('.tp-add select')) localStorage.setItem(K_TLIST, ev.target.value);
+});
+
+// 할 일 편집 창
+const tdlg = $('#taskEditor');
+const tform = $('#taskForm');
+let tEditing = null;
+function openTaskEditor(t) {
+  tEditing = t;
+  tform.listId.innerHTML = S.taskLists.map((l) => `<option value="${esc(l.id)}">${esc(l.title)}</option>`).join('');
+  tform.listId.value = t.listId;
+  tform.title.value = t.title;
+  tform.hasDue.checked = t.due != null;
+  tform.due.value = dayKey(t.due ?? S.selDay ?? startOfDay(Date.now()));
+  tform.done.checked = t.done;
+  tform.notes.value = t.notes || '';
+  $('#tfLink').hidden = !t.link;
+  if (t.link) $('#tfLink').href = t.link;
+  syncTaskEditor();
+  tdlg.showModal();
+}
+function syncTaskEditor() {
+  $('#tfDueRow').hidden = !tform.hasDue.checked;
+  $('#tfBox').style.setProperty('--c', taskColor());
+  $('#tfBox').classList.toggle('on', tform.done.checked);
+}
+tform.hasDue.addEventListener('change', syncTaskEditor);
+tform.done.addEventListener('change', syncTaskEditor);
+$('#tfCancel').onclick = () => tdlg.close();
+tdlg.addEventListener('click', (ev) => { if (ev.target === tdlg) tdlg.close(); });
+tform.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const orig = tEditing;
+  const done = tform.done.checked;
+  const next = {
+    ...orig,
+    title: tform.title.value.trim() || orig.title || '할 일',
+    listId: tform.listId.value,
+    due: tform.hasDue.checked && tform.due.value ? fromDayKey(tform.due.value) : null,
+    done,
+    completed: done ? (orig.completed || Date.now()) : null,
+    notes: tform.notes.value,
+  };
+  $('#tfSave').disabled = true;
+  const saved = await guardedTask(() => S.tStore.update(next, orig.listId));
+  $('#tfSave').disabled = false;
+  if (!saved) return;
+  putTask(saved);
+  tdlg.close();
+  render();
+  toast('할 일을 수정했습니다');
+});
+$('#tfDelete').onclick = async () => {
+  const t = tEditing;
+  if (!confirm(`‘${t.title}’ 할 일을 삭제할까요?`)) return;
+  const ok = await guardedTask(async () => { await S.tStore.remove(t); return true; });
+  if (!ok) return;
+  S.tasks = S.tasks.filter((x) => x.id !== t.id);
+  tdlg.close();
+  render();
+  toast('할 일을 삭제했습니다', {
+    label: '되돌리기',
+    run: async () => {
+      const { id, link, ...rest } = t;
+      void id; void link;
+      const back = await guardedTask(() => S.tStore.create(rest));
+      if (back) { putTask(back); render(); }
+    },
+  });
+};
+
+/** 휴대폰: ☰ → 할 일 (어두운 전체 화면) */
+function openTasks() {
+  if (S.needsLogin) return;
+  closeMenu();
+  closeSearch();
+  document.body.classList.add('tasks-open');
+  renderTasks();
+  ensureTasks(true).then(() => render());
+}
+function closeTasks() {
+  document.body.classList.remove('tasks-open');
+  document.activeElement?.blur?.();
+}
+$('#mTasksBtn').onclick = openTasks;
+$('#tasksDone').onclick = closeTasks;
+$('#sbTabs').onclick = (ev) => {
+  const b = ev.target.closest('[data-sbtab]');
+  if (!b) return;
+  S.sbTab = b.dataset.sbtab;
+  localStorage.setItem(K_SBTAB, S.sbTab);
+  renderTasks();
+  if (S.sbTab === 'tasks') ensureTasks(true).then(() => render());
+};
+
+/* ---------- 날짜가 바뀌었거나 오래 쉬었다 열면 오늘로 ---------- */
+// 아이폰 홈 화면 앱은 닫아도 메모리에 남아 있다가 그대로 다시 열린다 → 어제 고른 날이 남지 않게 한다.
+const AWAY_RESET = 5 * 60e3; // 5분 넘게 다른 앱에 있다가 돌아오면 「새로 연 것」으로 본다
+let lastToday = startOfDay(Date.now());
+let hiddenAt = 0;
+function backToTodayIfStale() {
+  const today = startOfDay(Date.now());
+  const dayChanged = today !== lastToday;
+  const away = hiddenAt > 0 && Date.now() - hiddenAt >= AWAY_RESET;
+  lastToday = today;
+  if (!dayChanged && !away) return false;
+  // 입력 중이면 건드리지 않는다
+  if (dlg.open || tdlg.open || document.body.classList.contains('quick-open')) return false;
+  S.cursor = today;
+  S.selDay = null;
+  S.miniMonth = startOfMonth(today);
+  S.jump = true;
+  syncQuickHint();
+  return true;
+}
+
 /* ---------- 이벤트 연결 ---------- */
 
 function setView(v) {
@@ -1497,7 +1815,8 @@ $('#calSetBtn').onclick = () => toggleCalPanel();
 $('#allCals').addEventListener('change', (ev) => {
   // 하나라도 꺼져 있으면 모두 켜고, 모두 켜져 있으면 모두 끈다
   const showAll = ev.target.checked;
-  S.hidden = new Set(showAll ? [] : S.cals.map((c) => c.id));
+  const keepTasks = S.hidden.has(TASKS_KEY) ? [TASKS_KEY] : []; // 할 일 켜기·끄기는 따로 둔다
+  S.hidden = new Set([...keepTasks, ...(showAll ? [] : S.cals.map((c) => c.id))]);
   localStorage.setItem(K_HIDDEN, JSON.stringify([...S.hidden]));
   render();
 });
@@ -1743,6 +2062,24 @@ document.addEventListener('click', async (ev) => {
     return;
   }
   if (act === 'demo') { localStorage.setItem(K_MODE, 'demo'); location.reload(); return; }
+  if (act === 'tasks-consent') { sessionStorage.setItem('nanal.askedTasks', '1'); beginLogin(CONFIG.clientId); return; }
+  if (act === 'tasks-later') {
+    localStorage.setItem(K_ASK, '1');
+    syncAsk();
+    toast(mq.matches ? '☰ → 할 일에서 언제든 허용할 수 있습니다' : '왼쪽 「할 일」에서 언제든 허용할 수 있습니다');
+    return;
+  }
+  if (act === 'tasks-retry') { S.tasksAt = 0; S.tasksState = 'idle'; renderTasks(); await ensureTasks(true); render(); return; }
+  if (act === 'tasks-done-toggle') { S.showDone = !S.showDone; renderTasks(); return; }
+  // 할 일: 체크 상자 = 완료/취소, 줄 = 편집 창
+  const tcheck = t.closest('[data-tcheck]');
+  if (tcheck) { toggleTask(tcheck.dataset.tcheck); return; }
+  const trow = t.closest('[data-task]');
+  if (trow && !t.closest('dialog')) {
+    const task = S.tasks.find((x) => x.id === trow.dataset.task);
+    if (task) openTaskEditor(task);
+    return;
+  }
   if (act === 'close-pop') { closeDayPop(); return; }
   if (act === 'day-view') { const k = t.closest('[data-goto]').dataset.goto; closeDayPop(); S.cursor = fromDayKey(k); S.selDay = S.cursor; syncQuickHint(); S.miniMonth = startOfMonth(S.cursor); setView('day'); return; }
   const pop = $('#dayPop');
@@ -1825,6 +2162,8 @@ document.addEventListener('change', (ev) => {
 
 // 단축키: t 오늘, d/w/m/l 보기, ←/→ 이동, n 빠른 입력
 document.addEventListener('keydown', (ev) => {
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches?.('.tsk[data-task]')) { ev.preventDefault(); ev.target.click(); return; }
+  if (ev.key === 'Escape' && document.body.classList.contains('tasks-open') && !tdlg.open) { closeTasks(); return; }
   if (ev.key === 'Escape' && $('#ctx')) { closeCtx(); return; }
   if (ev.key === 'Escape' && $('#dayPop')) { closeDayPop(); return; }
   if (ev.key === 'Escape' && document.body.classList.contains('cals-open')) { toggleCalPanel(false); return; }
@@ -1836,7 +2175,7 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Escape' && document.body.matches('.menu-open, .search-open')) { closeMenu(); closeSearch(); return; }
-  if (ev.metaKey || ev.ctrlKey || ev.altKey || dlg.open) return;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey || dlg.open || tdlg.open) return;
   if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
   const k = ev.key;
   if (k === 't') goToday();
@@ -1861,7 +2200,7 @@ addEventListener('resize', () => {
 mq.addEventListener('change', () => {
   placeAccount();
   S.mvFrom = null; S.mcFrom = null; // 주 시작 요일이 휴대폰(일)·데스크톱(설정)에서 다를 수 있다
-  if (!mq.matches) { closeQuick(); closeMenu(); closeSearch(); } else { closeCtx(); toggleCalPanel(false); }
+  if (!mq.matches) { closeQuick(); closeMenu(); closeSearch(); closeTasks(); } else { closeCtx(); toggleCalPanel(false); }
   S.jump = true;
   render();
 });
@@ -1869,13 +2208,19 @@ mq.addEventListener('change', () => {
 // 현재 시각 선 갱신 + 다른 기기에서 바뀐 일정 반영
 setInterval(() => {
   if (S.needsLogin) return;
+  backToTodayIfStale(); // 자정이 지나면 오늘로
   const stale = useGoogle && S.loaded && Date.now() - S.loaded.at > 5 * 60e3;
   render({ refetch: stale });
 }, 60e3);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && useGoogle && !S.needsLogin) { searchPool = null; render({ refetch: true }); }
-  if (document.visibilityState === 'visible') loadWeather();
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+  const moved = backToTodayIfStale();
+  hiddenAt = 0;
+  if (useGoogle && !S.needsLogin) { searchPool = null; render({ refetch: true }); } else if (moved && !S.needsLogin) render();
+  loadWeather();
 });
+// 아이폰이 앱을 메모리에서 그대로 되살린 경우(bfcache)
+addEventListener('pageshow', (ev) => { if (ev.persisted && backToTodayIfStale() && !S.needsLogin) render(); });
 
 /* ---------- 시작 ---------- */
 
@@ -1893,6 +2238,13 @@ async function start() {
     }
   }
   if (redirect?.ok) sessionStorage.removeItem('nanal.silentTried');
+  // 할 일 권한 동의 화면에서 취소한 경우: 캘린더 토큰은 그대로라 안내만 한다
+  if (redirect?.error && getToken()) toast('할 일 권한을 허용하지 않았습니다. 캘린더는 그대로 쓸 수 있습니다');
+  // 방금 동의 화면에서 할 일만 빼고 허용했으면 띠를 다시 띄우지 않는다(조용한 토큰 갱신은 해당 없음)
+  if (redirect && sessionStorage.getItem('nanal.askedTasks')) {
+    sessionStorage.removeItem('nanal.askedTasks');
+    if (redirect.ok && useGoogle && !hasTasksScope()) localStorage.setItem(K_ASK, '1');
+  }
   placeAccount();
   await render();
   loadWeather();

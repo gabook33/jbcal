@@ -62,12 +62,19 @@
       <div class="m-menu-acts">
         <button type="button" id="mTodayBtn">오늘로 이동</button>
         <button type="button" id="mViewBtn">3일 보기</button>
+        <button type="button" id="mTasksBtn">할 일</button>
       </div>
       <section class="mini" id="mini"></section>
+      <!-- 데스크톱 왼쪽: 날짜별 일정 / 할 일 목록 바꾸기 -->
+      <div class="sb-tabs" id="sbTabs" role="tablist">
+        <button type="button" id="sbEvTab" data-sbtab="ev" role="tab">일정</button>
+        <button type="button" id="sbTasksTab" data-sbtab="tasks" role="tab">할 일</button>
+      </div>
       <section class="upcoming">
         <h2 class="side-h">다가오는 일정</h2>
         <div id="upcoming"></div>
       </section>
+      <section class="sb-tasks tp-host" id="sbTasks" aria-label="할 일" hidden></section>
       <section class="cals" id="calsPanel">
         <h2 class="side-h">캘린더</h2>
         <div class="acct-slot" id="acctSlot"></div>
@@ -122,6 +129,10 @@
         </div>
       </div>
       <div class="banner" id="banner" hidden></div>
+      <div class="banner ask" id="askBanner" hidden>
+        <span>할 일(Google Tasks)을 보려면 구글 권한을 한 번 더 허용해 주세요.</span>
+        <span class="ask-btns"><button type="button" class="btn small primary" data-act="tasks-consent">허용하기</button><button type="button" class="btn small ghost" data-act="tasks-later">나중에</button></span>
+      </div>
       <div class="view" id="view"></div>
 
     </main>
@@ -151,6 +162,15 @@
         <button type="button" class="qs-btn" id="searchCancel">취소</button>
       </div>
       <div class="ms-list ag-main m-list" id="searchList"></div>
+    </div>
+
+    <!-- 휴대폰 할 일 화면(☰ → 할 일). 내용은 데스크톱 왼쪽 「할 일」과 같은 tp-host 로 그린다 -->
+    <div class="m-tasks" id="tasksSheet" role="dialog" aria-label="할 일">
+      <div class="mt-head">
+        <strong>할 일</strong>
+        <button type="button" class="qs-btn strong" id="tasksDone">완료</button>
+      </div>
+      <div class="mt-body tp-host" id="tasksBody"></div>
     </div>
   </div>
 
@@ -197,6 +217,31 @@
         <span class="spacer"></span>
         <button type="button" class="btn" id="edCancel">취소</button>
         <button type="submit" class="btn primary" id="edSave">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="editor" id="taskEditor">
+    <form method="dialog" id="taskForm">
+      <div class="ed-head">
+        <span class="tsk-box ed-tbox" id="tfBox" aria-hidden="true"></span>
+        <input name="title" class="ed-title" placeholder="할 일" required>
+      </div>
+      <div class="ed-group">
+        <label class="row">목록 <select name="listId"></select></label>
+        <label class="row switch">마감일 <input type="checkbox" name="hasDue"></label>
+        <label class="row" id="tfDueRow">날짜 <input type="date" name="due"></label>
+        <label class="row switch">완료 <input type="checkbox" name="done"></label>
+      </div>
+      <div class="ed-group">
+        <label class="row col">메모 <textarea name="notes" rows="3" placeholder="메모"></textarea></label>
+      </div>
+      <a class="ed-link" id="tfLink" target="_blank" rel="noopener" hidden>구글 할 일에서 열기 ↗</a>
+      <div class="ed-actions">
+        <button type="button" class="btn danger" id="tfDelete">삭제</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="tfCancel">취소</button>
+        <button type="submit" class="btn primary" id="tfSave">저장</button>
       </div>
     </form>
   </dialog>

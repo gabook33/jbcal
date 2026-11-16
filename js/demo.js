@@ -78,6 +78,7 @@ function save(events) {
 
 export function resetDemo() {
   localStorage.removeItem(K);
+  localStorage.removeItem(KT);
 }
 
 export const demoStore = {
@@ -107,4 +108,56 @@ export const demoStore = {
   async remove(e) {
     save(load().filter((x) => x.id !== e.id));
   },
+};
+
+/* ---------- 할 일 (데모) ---------- */
+const KT = 'nanal.demo.tasks.v1';
+const TLISTS = [{ id: 'tl-my', title: '내 할 일' }, { id: 'tl-home', title: '집안일' }];
+
+function seedTasks(now) {
+  const today = startOfDay(now);
+  let n = 0;
+  const t = (listId, title, dueOff, done = false, notes = '') => ({
+    id: `t${++n}`, listId, title, notes, due: dueOff == null ? null : today + dueOff * DAY,
+    done, completed: done ? now - 3600e3 : null, parent: null, position: String(n).padStart(8, '0'), link: '',
+  });
+  return [
+    t('tl-my', '별첨 1 수치 확인', -2),
+    t('tl-my', 'K-2 보고서 회신', 0, false, '국장님께 메일'),
+    t('tl-my', '주간 회의 자료 출력', 0, true),
+    t('tl-home', '관리비 납부', 1),
+    t('tl-my', '건강검진 문진표 작성', 7),
+    t('tl-home', '세탁소 맡긴 옷 찾기', null),
+    t('tl-my', '읽을 책 목록 정리', null),
+    t('tl-home', '분리수거', -1, true),
+  ];
+}
+function loadTasks() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KT) || 'null');
+    if (s && Array.isArray(s.tasks)) return s.tasks;
+  } catch { /* 무시 */ }
+  const ts = seedTasks(Date.now());
+  saveTasks(ts);
+  return ts;
+}
+function saveTasks(tasks) { localStorage.setItem(KT, JSON.stringify({ tasks })); }
+
+export const demoTasks = {
+  kind: 'demo',
+  async lists() { return TLISTS.map((l) => ({ ...l })); },
+  async tasks() { return loadTasks(); },
+  async create(t) {
+    const ts = loadTasks();
+    const nt = { ...t, id: `ut${Date.now().toString(36)}${ts.length}`, completed: t.done ? Date.now() : null };
+    ts.push(nt);
+    saveTasks(ts);
+    return nt;
+  },
+  async update(t) {
+    const nt = { ...t, completed: t.done ? (t.completed || Date.now()) : null };
+    saveTasks(loadTasks().map((x) => (x.id === t.id ? nt : x)));
+    return nt;
+  },
+  async remove(t) { saveTasks(loadTasks().filter((x) => x.id !== t.id)); },
 };

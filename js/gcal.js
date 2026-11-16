@@ -5,14 +5,18 @@
 import { TZ, rfc3339, dayKey, fromDayKey, DAY } from './time.js';
 
 const API = 'https://www.googleapis.com/calendar/v3';
+const TASKS_API = 'https://tasks.googleapis.com/tasks/v1';
 const AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
-export const SCOPES = [
+export const CAL_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-].join(' ');
+];
+export const TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
+export const SCOPES = [...CAL_SCOPES, TASKS_SCOPE].join(' ');
 const K_TOKEN = 'nanal.gtoken';
 const K_STATE = 'nanal.oauthState';
 const K_LINKED = 'nanal.linked';
+const K_SCOPES = 'nanal.gscopes'; // 구글이 마지막으로 허락해 준 권한 범위(공백으로 구분)
 
 // 구글 일정 색(colorId 1~11)
 export const EVENT_COLORS = {
@@ -113,6 +117,14 @@ export function redirectUri() {
   return location.origin + path;
 }
 
+/** 구글이 허락한 권한 범위. 할 일(Tasks) 권한이 생기기 전에 연결한 기기는 비어 있다 */
+export const grantedScopes = () => (localStorage.getItem(K_SCOPES) || '').split(/\s+/).filter(Boolean);
+export const hasTasksScope = () => grantedScopes().includes(TASKS_SCOPE);
+
+/** 로그인 화면으로 보낸다.
+ *  조용한 갱신(prompt=none)은 캘린더 권한만 청한다: 아직 허락받지 않은 할 일 권한을 섞으면 구글이 동의 화면이 필요하다며
+ *  거절하므로 캘린더까지 끊긴다. include_granted_scopes 덕분에 이미 허락한 할 일 권한은 새 토큰에 그대로 따라온다.
+ *  사용자가 누른 로그인(silent 아님)은 캘린더 + 할 일을 같이 청한다 → 기존 사용자는 할 일 권한만 한 번 더 묻는다. */
 export function beginLogin(clientId, { silent = false } = {}) {
   const state = crypto.getRandomValues(new Uint32Array(4)).join('-');
   sessionStorage.setItem(K_STATE, state);
@@ -120,7 +132,7 @@ export function beginLogin(clientId, { silent = false } = {}) {
     client_id: clientId,
     redirect_uri: redirectUri(),
     response_type: 'token',
-    scope: SCOPES,
+    scope: silent ? CAL_SCOPES.join(' ') : SCOPES,
     include_granted_scopes: 'true',
     state,
   });
@@ -143,6 +155,7 @@ export function consumeRedirect() {
     exp: Date.now() + (Number(h.get('expires_in')) || 3600) * 1000,
   }));
   localStorage.setItem(K_LINKED, '1');
+  if (h.has('scope')) localStorage.setItem(K_SCOPES, h.get('scope'));
   return { ok: true };
 }
 
@@ -150,6 +163,7 @@ export async function logout() {
   const t = getToken();
   localStorage.removeItem(K_TOKEN);
   localStorage.removeItem(K_LINKED);
+  localStorage.removeItem(K_SCOPES);
   if (t) {
     try {
       await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(t)}`, { method: 'POST' });
@@ -160,11 +174,15 @@ export async function logout() {
 /* ---------- API ---------- */
 
 export class AuthError extends Error {}
+/** 할 일: 토큰에 Tasks 권한이 없음(다시 동의 필요) */
+export class ScopeError extends Error {}
+/** 할 일: 구글 클라우드 프로젝트에서 Tasks API 가 꺼져 있음 */
+export class ApiDisabledError extends Error {}
 
-async function call(path, { method = 'GET', body, query } = {}) {
+async function call(path, { method = 'GET', body, query, base = API, label = '구글 캘린더' } = {}) {
   const token = getToken();
   if (!token) throw new AuthError('로그인이 필요합니다');
-  const url = `${API}${path}${query ? `?${new URLSearchParams(query)}` : ''}`;
+  const url = `${base}${path}${query ? `?${new URLSearchParams(query)}` : ''}`;
   const res = await fetch(url, {
     method,
     headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
@@ -176,8 +194,17 @@ async function call(path, { method = 'GET', body, query } = {}) {
   }
   if (!res.ok) {
     let msg = `${res.status}`;
-    try { msg = (await res.json()).error?.message || msg; } catch { /* 무시 */ }
-    throw new Error(`구글 캘린더 오류: ${msg}`);
+    let err = null;
+    try { err = (await res.json()).error; msg = err?.message || msg; } catch { /* 무시 */ }
+    if (res.status === 403) {
+      const why = JSON.stringify(err || {});
+      if (/SERVICE_DISABLED|accessNotConfigured|has not been used|is disabled/i.test(why)) throw new ApiDisabledError(msg);
+      if (/insufficient|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(why)) {
+        localStorage.setItem(K_SCOPES, grantedScopes().filter((x) => x !== TASKS_SCOPE).join(' '));
+        throw new ScopeError(msg);
+      }
+    }
+    throw new Error(`${label} 오류: ${msg}`);
   }
   return res.status === 204 ? null : res.json();
 }
@@ -236,5 +263,84 @@ export const googleStore = {
   },
   async remove(e) {
     await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'DELETE' });
+  },
+};
+
+/* ---------- 할 일 (Google Tasks) ---------- */
+// 구글 할 일의 마감일은 날짜만 쓴다(시각은 구글이 버린다). 'YYYY-MM-DDT00:00:00.000Z' 의 날짜 부분이 그 날이다.
+
+export function taskFromGoogle(t, list) {
+  return {
+    id: t.id,
+    listId: list.id,
+    title: t.title || '',
+    notes: t.notes || '',
+    due: t.due ? fromDayKey(t.due.slice(0, 10)) : null,
+    done: t.status === 'completed',
+    completed: t.completed ? Date.parse(t.completed) : null,
+    parent: t.parent || null,
+    position: t.position || '',
+    link: t.webViewLink || '',
+  };
+}
+
+/** 앱 → 구글. create 가 아니면(수정) 빈 마감일·완료 시각을 null 로 보내 구글 쪽 값도 지운다 */
+export function taskToGoogle(t, { create = false } = {}) {
+  const body = {
+    title: t.title,
+    notes: t.notes || '',
+    status: t.done ? 'completed' : 'needsAction',
+  };
+  if (t.due != null) body.due = `${dayKey(t.due)}T00:00:00.000Z`;
+  else if (!create) body.due = null;
+  if (!t.done && !create) body.completed = null;
+  return body;
+}
+
+const tcall = (path, opts = {}) => call(path, { ...opts, base: TASKS_API, label: '구글 할 일' });
+
+export const googleTasks = {
+  kind: 'google',
+  async lists() {
+    const out = [];
+    let pageToken;
+    do {
+      const r = await tcall('/users/@me/lists', { query: { maxResults: 100, ...(pageToken ? { pageToken } : {}) } });
+      out.push(...(r.items || []).map((l) => ({ id: l.id, title: l.title || '할 일' })));
+      pageToken = r.nextPageToken;
+    } while (pageToken);
+    return out;
+  },
+  async tasks(lists) {
+    const per = await Promise.all(lists.map(async (list) => {
+      const out = [];
+      let pageToken;
+      let pages = 0;
+      do {
+        // 완료한 할 일은 구글 앱에서 「숨김」으로 바뀌므로 showHidden 도 켠다
+        const r = await tcall(`/lists/${enc(list.id)}/tasks`, {
+          query: { maxResults: 100, showCompleted: 'true', showHidden: 'true', ...(pageToken ? { pageToken } : {}) },
+        });
+        out.push(...(r.items || []).filter((t) => !t.deleted).map((t) => taskFromGoogle(t, list)));
+        pageToken = r.nextPageToken;
+      } while (pageToken && ++pages < 20);
+      return out;
+    }));
+    return per.flat();
+  },
+  async create(t) {
+    const r = await tcall(`/lists/${enc(t.listId)}/tasks`, { method: 'POST', body: taskToGoogle(t, { create: true }) });
+    return taskFromGoogle(r, { id: t.listId });
+  },
+  async update(t, prevListId) {
+    // 목록을 바꿨으면 먼저 옮긴다(move, destinationTasklist) → 내용 수정(patch)
+    if (prevListId && prevListId !== t.listId) {
+      await tcall(`/lists/${enc(prevListId)}/tasks/${enc(t.id)}/move`, { method: 'POST', query: { destinationTasklist: t.listId } });
+    }
+    const r = await tcall(`/lists/${enc(t.listId)}/tasks/${enc(t.id)}`, { method: 'PATCH', body: taskToGoogle(t) });
+    return taskFromGoogle(r, { id: t.listId });
+  },
+  async remove(t) {
+    await tcall(`/lists/${enc(t.listId)}/tasks/${enc(t.id)}`, { method: 'DELETE' });
   },
 };

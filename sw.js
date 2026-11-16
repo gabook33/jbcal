@@ -1,10 +1,10 @@
 // 오프라인에서도 앱 화면이 열리도록 앱 파일을 저장해 둔다.
 // 경로는 상대 경로라 GitHub Pages 하위 경로(/jbcal/)에서도 같다.
 // 구글 API·로그인 요청은 건드리지 않는다(항상 네트워크).
-const VERSION = 'jbs-calendar-v8';
+const VERSION = 'jbs-calendar-v9';
 const SHELL = [
   './', 'index.html', 'config.js', 'manifest.webmanifest', 'css/styles.css',
-  'js/app.js', 'js/time.js', 'js/nlp.js', 'js/gcal.js', 'js/demo.js',
+  'js/app.js', 'js/time.js', 'js/nlp.js', 'js/gcal.js', 'js/demo.js', 'js/tasks.js',
   'icons/icon.svg', 'icons/icon-32.png', 'icons/icon-192.png', 'icons/apple-touch-icon.png',
 ];
 
