@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JB's 캘린더 위젯 설치</title>
+<style>
+  body { margin: 0; font-family: -apple-system, 'Apple SD Gothic Neo', sans-serif; background: #f5f5f7; color: #1c1c1e; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 18px 48px; }
+  h1 { font-size: 28px; margin: 8px 0 4px; } h1 span { color: #e8372c; }
+  p, li { line-height: 1.6; font-size: 16px; }
+  .card { background: #fff; border-radius: 16px; padding: 16px 18px; margin: 16px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  button { font: 600 17px -apple-system, sans-serif; color: #fff; background: #3a87f2; border: 0; border-radius: 12px; padding: 12px 18px; width: 100%; margin: 6px 0; }
+  button.sub { background: #1c1c1e; }
+  .ok { color: #34c759; font-weight: 600; min-height: 1.4em; }
+  img { width: 100%; border-radius: 14px; }
+  a { color: #3a87f2; }
+  @media (prefers-color-scheme: dark) { body { background: #000; color: #f2f2f7; } .card { background: #1c1c1e; } button.sub { background: #3a3a3c; } }
+</style>
+</head>
+<body>
+<main>
+  <h1><span>JB's</span> 캘린더 위젯</h1>
+  <p>아이폰 홈 화면 위젯입니다. 무료 앱 <b>Scriptable</b>로 동작하고, 아이폰 캘린더(구글 계정 포함)의 일정을 보여 줍니다. 계정·비밀번호를 넣지 않습니다.</p>
+  <img src="preview.png" alt="위젯 미리보기">
+  <div class="card">
+    <b>방법 1. 코드 복사해서 붙여넣기</b>
+    <ol>
+      <li>아래 버튼을 누르면 위젯 코드가 복사됩니다.</li>
+      <li>Scriptable 앱 → 오른쪽 위 <b>＋</b> → 빈 화면을 길게 눌러 <b>붙여넣기</b> → 위쪽 제목을 「JB 캘린더」로 바꾸고 <b>Done</b>.</li>
+    </ol>
+    <button id="copyMain">위젯 코드 복사</button>
+    <div class="ok" id="msgMain"></div>
+  </div>
+  <div class="card">
+    <b>방법 2. 설치 도우미 (나중에 업데이트도 쉬움)</b>
+    <ol>
+      <li>아래 버튼으로 설치 도우미 코드를 복사 → Scriptable ＋ → 붙여넣기 → 제목 「위젯 설치」 → Done.</li>
+      <li>「위젯 설치」를 눌러 실행하면 「JB 캘린더」 스크립트가 자동으로 생깁니다. 다시 실행하면 최신판으로 바뀝니다.</li>
+    </ol>
+    <button class="sub" id="copyInst">설치 도우미 코드 복사</button>
+    <div class="ok" id="msgInst"></div>
+  </div>
+  <p>자세한 설명: 「위젯 설치 안내」 문서를 참고하세요. 코드 보기: <a href="JBCalendarWidget.js">JBCalendarWidget.js</a> · <a href="install.js">install.js</a></p>
+  <p><a href="../">← JB's 캘린더 열기</a></p>
+</main>
+<script>
+  const texts = {};
+  const load = (f) => fetch(f + '?t=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => { texts[f] = t; });
+  const ready = Promise.all([load('JBCalendarWidget.js'), load('install.js')]);
+  async function copy(f, msg) {
+    const el = document.getElementById(msg);
+    try {
+      // 아이폰 사파리는 누른 순간에 바로 복사해야 해서, 이미 받아 둔 글을 기다림 없이 넘긴다
+      if (!texts[f]) await ready;
+      await navigator.clipboard.writeText(texts[f]);
+      el.textContent = '복사했습니다. 이제 Scriptable에서 붙여넣으세요.';
+    } catch (e) {
+      el.textContent = '복사가 안 되면 아래 「코드 보기」를 열어 전체 선택 → 복사하세요.';
+    }
+  }
+  document.getElementById('copyMain').onclick = () => copy('JBCalendarWidget.js', 'msgMain');
+  document.getElementById('copyInst').onclick = () => copy('install.js', 'msgInst');
+</script>
+</body>
+</html>
