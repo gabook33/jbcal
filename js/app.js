@@ -19,6 +19,7 @@ const params = new URLSearchParams(location.search);
 const K_VIEW = 'nanal.view';
 const K_HIDDEN = 'nanal.hiddenCals';
 const K_MODE = 'nanal.mode';
+const K_TK = 'nanal.tickerOpen';
 
 if (params.has('reset-demo')) resetDemo();
 if (params.get('demo') === '1') localStorage.setItem(K_MODE, 'demo');
@@ -37,8 +38,7 @@ const S = {
   cursor: params.get('date') ? fromDayKey(params.get('date')) : startOfDay(Date.now()),
   miniMonth: null,
   needsLogin: false,
-  tab: 'events', // 휴대폰 아래 탭: events | calendars | todos
-  tickerOpen: false, // 휴대폰 위 날짜 줄이 월 달력으로 펼쳐졌는지
+  tickerOpen: localStorage.getItem(K_TK) !== '0', // 휴대폰 위 달력: 한 달(기본) / 한 주로 접힘
   listFrom: null, // 연속 목록이 시작하는 날
   listDays: 0,
   jump: true, // 다음 렌더링 때 목록·월 보기를 S.cursor 날짜로 스크롤
@@ -170,6 +170,7 @@ async function render({ refetch = false } = {}) {
   renderUpcoming();
   renderCals();
   renderView();
+  if (document.body.classList.contains('search-open')) runSearch();
   S.jump = false;
 }
 
@@ -316,45 +317,45 @@ function miniStep(dir) {
   c.scrollTo({ top: row.offsetTop, behavior: 'smooth' });
 }
 
-/* ---------- 휴대폰 위 날짜 줄 (접으면 한 주, 펼치면 한 달) ---------- */
+/* ---------- 휴대폰 위 달력 (기본은 한 달 여섯 주, 손잡이로 고른 주 한 줄까지 접힘) ---------- */
 
 const tickerMonth = () => (S.tickerOpen ? S.miniMonth : startOfMonth(S.cursor));
+const TK_WEEKS = 6; // 달마다 높이가 바뀌지 않게 늘 여섯 주
 
 function renderTicker() {
   const el = $('#ticker');
   const m = tickerMonth();
   const mp = P(m);
   const gs = startOfWeek(m);
-  const weeks = Math.ceil((mp.dow + Math.round((addMonths(m, 1) - m) / DAY)) / 7);
   const today = startOfDay(Date.now());
+  const tdow = P(today).dow;
   const sel = startOfDay(S.cursor);
   let rows = '';
-  for (let w = 0; w < weeks; w++) {
+  for (let w = 0; w < TK_WEEKS; w++) {
     let cells = '';
     for (let i = 0; i < 7; i++) {
       const d = gs + (w * 7 + i) * DAY;
       const p = P(d);
       const evs = visibleEvents(d, d + DAY);
-      const dots = [...new Set(evs.filter((e) => !isHoliday(e)).map(colorOf))].slice(0, 3)
-        .map((c) => `<i style="background:${c}"></i>`).join('');
+      // 일정 하나에 점 하나(캘린더 색), 최대 넷
+      const dots = evs.slice(0, 4).map((e) => `<i style="background:${colorOf(e)}"></i>`).join('');
       const cls = [
         'tk-day',
         p.m !== mp.m && 'other',
         d === today && 'today',
         d === sel && 'sel',
-        (p.dow === 0 || evs.some(isHoliday)) && 'sun',
-        p.dow === 6 && 'sat',
+        (i === 0 || i === 6) && 'wkend',
       ].filter(Boolean).join(' ');
-      cells += `<button class="${cls}" data-day="${dayKey(d)}" aria-label="${p.m + 1}월 ${p.d}일"><span class="n">${p.d}</span><b>${dots}</b></button>`;
+      cells += `<button class="${cls}" data-day="${dayKey(d)}" aria-label="${p.m + 1}월 ${p.d}일${evs.length ? `, 일정 ${evs.length}개` : ''}"><span class="n">${p.d}</span><b>${dots}</b></button>`;
     }
     rows += `<div class="tk-row${d0InWeek(sel, gs + w * 7 * DAY) ? ' cur' : ''}">${cells}</div>`;
   }
-  const selRow = Math.min(Math.max(Math.floor((startOfWeek(sel) - gs) / (7 * DAY)), 0), weeks - 1);
+  const selRow = Math.min(Math.max(Math.floor((startOfWeek(sel) - gs) / (7 * DAY)), 0), TK_WEEKS - 1);
   el.innerHTML = `
-    <div class="tk-wd">${WD.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
+    <div class="tk-wd">${WD.map((w, i) => `<span class="${[(i === 0 || i === 6) && 'wkend', i === tdow && 'tdow'].filter(Boolean).join(' ')}">${w}</span>`).join('')}</div>
     <div class="tk-clip"><div class="tk-grid">${rows}</div></div>
     <button class="tk-grab" id="tkGrab" aria-label="${S.tickerOpen ? '달력 접기' : '달력 펼치기'}"><i></i></button>`;
-  el.style.setProperty('--weeks', weeks);
+  el.style.setProperty('--weeks', TK_WEEKS);
   el.style.setProperty('--row', selRow);
   el.classList.toggle('expanded', S.tickerOpen);
   syncTickerHead();
@@ -363,12 +364,7 @@ function d0InWeek(day, weekStart) { return day >= weekStart && day < weekStart +
 
 function syncTickerHead() {
   const mp = P(tickerMonth());
-  $('#mTitle').innerHTML = `<small>${mp.y}년</small> ${mp.m + 1}월`;
-  const t = $('#monthToggle');
-  t.setAttribute('aria-expanded', String(S.tickerOpen));
-  t.setAttribute('aria-label', `${mp.y}년 ${mp.m + 1}월, ${S.tickerOpen ? '달력 접기' : '달력 펼치기'}`);
-  $('#tkPrev').setAttribute('aria-label', S.tickerOpen ? '이전 달' : '이전 주');
-  $('#tkNext').setAttribute('aria-label', S.tickerOpen ? '다음 달' : '다음 주');
+  $('#mTitle').innerHTML = `<span class="y">${mp.y}년</span> <b>${mp.m + 1}월</b>`;
 }
 
 function toggleTicker(open = !S.tickerOpen) {
@@ -386,12 +382,13 @@ function toggleTicker(open = !S.tickerOpen) {
     }
     S.tickerOpen = false;
   }
+  localStorage.setItem(K_TK, S.tickerOpen ? '1' : '0');
   el.classList.toggle('expanded', S.tickerOpen);
   el.querySelector('#tkGrab')?.setAttribute('aria-label', S.tickerOpen ? '달력 접기' : '달력 펼치기');
   syncTickerHead();
 }
 
-/** 날짜 줄 좌우 이동: 접힌 상태는 한 주, 펼친 상태는 한 달 */
+/** 달력 좌우 이동: 펼친 상태는 한 달, 접힌 상태는 한 주 */
 function tickerStep(dir) {
   if (S.tickerOpen) {
     S.miniMonth = addMonths(S.miniMonth, dir);
@@ -437,6 +434,7 @@ function renderUpcoming() {
 /* ---------- 날짜별 연속 목록 (휴대폰 기본 화면 · 데스크톱 목록 보기) ---------- */
 
 function listHTML(from, days) {
+  if (mq.matches) return mListHTML(from, days);
   const now = Date.now();
   const today = startOfDay(now);
   let html = '';
@@ -468,6 +466,92 @@ function listHTML(from, days) {
   }
   return html;
 }
+
+/* 휴대폰 목록(어두운 바탕): 일정 있는 날만 + 오늘·고른 날.
+   「금요일 2026. 11. 13.」 머리, 시간 일정은 점 + 「3:30 – 오후 4:30」 + 제목 + 장소, 종일 일정은 색 이름표 */
+const ampm = (ts) => (P(ts).h < 12 ? '오전' : '오후');
+function mTimeRange(e, d) {
+  const s = e.start < d ? null : e.start;
+  const en = e.end > d + DAY ? null : e.end;
+  if (s == null && en == null) return '하루 종일';
+  if (s == null) return `… – ${fmtTime(en)}`;
+  if (en == null) return `${fmtTime(s)} – …`;
+  // 오전/오후가 같으면 앞 시각의 오전/오후는 뺀다
+  return `${ampm(s) === ampm(en) ? fmtTime(s).replace(/^오[전후] /, '') : fmtTime(s)} – ${fmtTime(en)}`;
+}
+function mEventsHTML(evs, d, now) {
+  const ads = evs.filter((e) => e.allDay);
+  let html = ads.length ? `<div class="m-ads">${ads.map((e) => `<button class="ag-ev m-allday" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"><span class="ag-title">${esc(e.title)}</span></button>`).join('')}</div>` : '';
+  for (const e of evs) {
+    if (e.allDay) continue;
+    const past = e.end < now ? ' past' : '';
+    html += `<button class="ag-ev m-ev${past}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">
+      <i class="m-dot"></i><span class="m-time">${mTimeRange(e, d)}</span>
+      <span class="ag-title">${esc(e.title)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}
+    </button>`;
+  }
+  return html;
+}
+const mDayLabel = (d, today) => {
+  const p = P(d);
+  return `<b>${d === today ? '오늘' : `${WD[p.dow]}요일`}</b> ${p.y}. ${p.m + 1}. ${p.d}.`;
+};
+function mListHTML(from, days) {
+  const now = Date.now();
+  const today = startOfDay(now);
+  const keep = new Set([today, S.selDay, startOfDay(S.cursor)]);
+  let html = '';
+  for (let i = 0; i < days; i++) {
+    const d = from + i * DAY;
+    const evs = visibleEvents(d, d + DAY);
+    if (!evs.length && !keep.has(d)) continue;
+    const cls = ['ag-day', 'm-day', d === today && 'today', d < today && 'before'].filter(Boolean).join(' ');
+    html += `<section class="${cls}" data-date="${dayKey(d)}"><h3 class="ag-h">${mDayLabel(d, today)}${wxHTML(d)}</h3>`;
+    html += evs.length ? mEventsHTML(evs, d, now) : '<div class="ag-empty">일정 없음</div>';
+    html += '</section>';
+  }
+  return html;
+}
+
+/* ---------- 날씨 (Open-Meteo: 키 없이 쓰는 공개 예보. 위치는 config.js weather, 없으면 대구) ---------- */
+const WX = CONFIG.weather === false ? null : { lat: 35.85, lon: 128.58, ...(CONFIG.weather || {}) };
+const K_WX = 'nanal.wx.v1';
+let wxData = (() => { try { return JSON.parse(localStorage.getItem(K_WX)); } catch { return null; } })();
+let wxBusy = false;
+async function loadWeather() {
+  if (!WX || wxBusy || params.has('nowx')) return;
+  if (wxData && Date.now() - wxData.at < 3 * 3600e3 && wxData.lat === WX.lat && wxData.lon === WX.lon) return;
+  wxBusy = true;
+  try {
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${WX.lat}&longitude=${WX.lon}&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=Asia%2FSeoul&forecast_days=10`;
+    const r = await fetch(u);
+    if (!r.ok) return;
+    const j = await r.json();
+    const days = {};
+    j.daily.time.forEach((k, i) => { days[k] = [Math.round(j.daily.temperature_2m_max[i]), Math.round(j.daily.temperature_2m_min[i]), j.daily.weather_code[i]]; });
+    wxData = { at: Date.now(), lat: WX.lat, lon: WX.lon, days };
+    localStorage.setItem(K_WX, JSON.stringify(wxData));
+    document.querySelectorAll('.m-day[data-date] > .ag-h').forEach((h) => {
+      h.querySelector('.m-wx')?.remove();
+      h.insertAdjacentHTML('beforeend', wxHTML(fromDayKey(h.parentElement.dataset.date)));
+    });
+  } catch { /* 날씨는 없어도 된다 */ } finally { wxBusy = false; }
+}
+function wxIcon(code) {
+  if (code === 0) return '☀️';
+  if (code <= 2) return '⛅';
+  if (code === 3 || code === 45 || code === 48) return '☁️';
+  if (code >= 95) return '⛈️';
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '🌨️';
+  if (code >= 51) return '🌧️';
+  return '☁️';
+}
+function wxHTML(d) {
+  const w = wxData?.days?.[dayKey(d)];
+  if (!w || d < startOfDay(Date.now())) return '';
+  return `<span class="m-wx" aria-label="최고 ${w[0]}도 최저 ${w[1]}도"><b>${w[0]}°</b>/${w[1]}° <i>${wxIcon(w[2])}</i></span>`;
+}
+
 const nowLineHTML = (now) => `<div class="ag-now"><span>${fmtTime(now)}</span></div>`;
 
 /** 목록 맨 위에 보이는 날과 그 날의 화면상 위치 */
@@ -536,7 +620,7 @@ function renderView() {
     const prev = el.querySelector('.ag-main');
     const keep = prev && shown && !S.jump && !listStale ? topDay(prev) : null;
     el.className = 'view v-list';
-    el.innerHTML = `<div class="ag-main" id="list">${listHTML(S.listFrom, S.listDays)}<div class="ag-tail"></div></div>`;
+    el.innerHTML = `<div class="ag-main${mq.matches ? ' m-list' : ''}" id="list">${listHTML(S.listFrom, S.listDays)}<div class="ag-tail"></div></div>`;
     const c = el.querySelector('.ag-main');
     if (keep) scrollToDay(c, keep.key, keep.off);
     else scrollToDay(c, dayKey(S.cursor));
@@ -822,16 +906,19 @@ async function createEvent(e) {
   const cal = calById(e.calendarId);
   const saved = await S.store.create(e, cal);
   S.events.push(saved);
+  searchPool?.evs.push(saved);
   return saved;
 }
 async function updateEvent(e, prevCalendarId) {
   const saved = await S.store.update(e, calById(e.calendarId), prevCalendarId);
   S.events = S.events.map((x) => (x.id === e.id ? saved : x));
+  if (searchPool) searchPool.evs = searchPool.evs.map((x) => (x.id === e.id ? saved : x));
   return saved;
 }
 async function removeEvent(e) {
   await S.store.remove(e);
   S.events = S.events.filter((x) => x.id !== e.id);
+  if (searchPool) searchPool.evs = searchPool.evs.filter((x) => x.id !== e.id);
 }
 
 async function guarded(fn) {
@@ -920,7 +1007,7 @@ function fitSheetToKeyboard() {
 }
 window.visualViewport?.addEventListener('resize', () => { if (document.body.classList.contains('quick-open')) fitSheetToKeyboard(); });
 $('#qsCancel').onclick = closeQuick;
-$('#qsScrim').onclick = closeQuick;
+$('#qsScrim').onclick = () => { closeQuick(); closeMenu(); };
 
 $('#quickForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -935,10 +1022,10 @@ $('#quickForm').addEventListener('submit', async (ev) => {
   }));
   if (!saved) return;
   closeQuick();
+  closeMenu();
   S.cursor = startOfDay(saved.start);
   S.miniMonth = startOfMonth(S.cursor);
   S.jump = true;
-  if (S.tab !== 'events') setTab('events');
   await render();
   flash(saved.id);
   toast(`‘${saved.title}’ 추가 · ${fmtDate(saved.start)}${saved.allDay ? '' : ` ${fmtTime(saved.start)}`}`, {
@@ -1145,16 +1232,66 @@ function syncQuickHint() {
   if (quick.value.trim()) quick.dispatchEvent(new Event('input'));
 }
 
-/** 휴대폰 아래 탭 */
-function setTab(tab) {
-  S.tab = tab;
-  document.body.dataset.tab = tab;
-  document.querySelectorAll('#tabbar [data-tab]').forEach((b) => {
-    b.classList.toggle('on', b.dataset.tab === tab);
-    b.setAttribute('aria-selected', String(b.dataset.tab === tab));
-  });
-  if (tab === 'events') { S.jump = false; render(); }
+/* ---------- 휴대폰: ☰ 캘린더·설정 시트, 검색 ---------- */
+
+function openMenu() {
+  if (S.needsLogin) return;
+  closeSearch();
+  const v = effView();
+  $('#mViewBtn').textContent = v === 'list' ? '3일 보기' : '목록 보기';
+  document.body.classList.add('menu-open');
 }
+function closeMenu() { document.body.classList.remove('menu-open'); }
+
+// 검색: 열 때 앞뒤로 넓게(6달 전 ~ 1년 뒤) 한 번 불러와 제목·장소·메모에서 찾는다
+let searchPool = null;
+async function openSearch() {
+  if (S.needsLogin) return;
+  closeMenu();
+  document.body.classList.add('search-open');
+  const inp = $('#searchInput');
+  inp.focus();
+  runSearch();
+  const today = startOfDay(Date.now());
+  if (!searchPool || Date.now() - searchPool.at > 5 * 60e3) {
+    try {
+      const evs = await S.store.events(S.cals, addMonths(startOfMonth(today), -6), addMonths(startOfMonth(today), 13));
+      searchPool = { at: Date.now(), evs };
+      runSearch();
+    } catch (err) { handleError(err); }
+  }
+}
+function closeSearch() {
+  document.body.classList.remove('search-open');
+  $('#searchInput').blur();
+}
+function runSearch() {
+  const q = $('#searchInput').value.trim().toLowerCase();
+  const box = $('#searchList');
+  if (!q) { box.innerHTML = '<div class="ms-hint">제목·장소·메모로 찾습니다</div>'; return; }
+  // 불러온 일정(검색용 + 화면용)을 합치되 같은 일정은 한 번만, 화면용 S.events 를 우선
+  const byId = new Map();
+  for (const e of [...(searchPool?.evs || []), ...S.events]) byId.set(e.id, e);
+  const hits = [...byId.values()]
+    .filter((e) => !S.hidden.has(e.calendarId)
+      && [e.title, e.location, e.note].some((t) => (t || '').toLowerCase().includes(q)))
+    .sort((a, b) => a.start - b.start);
+  if (!hits.length) { box.innerHTML = `<div class="ms-hint">‘${esc(q)}’ 일정이 없습니다</div>`; return; }
+  const now = Date.now();
+  const today = startOfDay(now);
+  const days = new Map();
+  hits.slice(0, 200).forEach((e) => { const d = startOfDay(e.start); if (!days.has(d)) days.set(d, []); days.get(d).push(e); });
+  let html = '';
+  for (const [d, evs] of days) {
+    html += `<section class="ag-day m-day${d === today ? ' today' : ''}" data-sdate="${dayKey(d)}"><h3 class="ag-h">${mDayLabel(d, today)}</h3>${mEventsHTML(evs.sort((a, b) => (b.allDay - a.allDay) || (a.start - b.start)), d, now)}</section>`;
+  }
+  box.innerHTML = html;
+  // 지난 일정도 찾되, 처음에는 오늘 이후 첫 결과가 맨 위에 오게
+  const next = [...box.querySelectorAll('[data-sdate]')].find((el) => fromDayKey(el.dataset.sdate) >= today);
+  box.scrollTop = next ? next.offsetTop - box.offsetTop : box.scrollHeight;
+}
+$('#searchInput').addEventListener('input', runSearch);
+$('#searchCancel').onclick = () => { $('#searchInput').value = ''; closeSearch(); };
 
 /** 계정 표시(데모 배지·구글 연결 버튼): 데스크톱은 위쪽 막대, 휴대폰은 「캘린더」 탭 */
 function placeAccount() {
@@ -1166,16 +1303,21 @@ function placeAccount() {
 $('#prevBtn').onclick = () => go(-1);
 $('#nextBtn').onclick = () => go(1);
 $('#todayBtn').onclick = goToday;
-$('#mTodayBtn').onclick = () => { if (S.tickerOpen) S.miniMonth = startOfMonth(Date.now()); goToday(); };
+$('#mTodayBtn').onclick = () => { closeMenu(); if (S.tickerOpen) S.miniMonth = startOfMonth(Date.now()); goToday(); };
 $('#viewSeg').onclick = (ev) => { const b = ev.target.closest('button'); if (b) setView(b.dataset.view); };
-$('#mViewBtn').onclick = () => setView(effView() === 'list' ? 'week' : 'list');
-$('#fab').onclick = () => (mq.matches ? openQuick() : quick.focus());
-$('#monthToggle').onclick = () => toggleTicker();
-$('#tkPrev').onclick = () => tickerStep(-1);
-$('#tkNext').onclick = () => tickerStep(1);
-$('#tabbar').onclick = (ev) => { const b = ev.target.closest('[data-tab]'); if (b) setTab(b.dataset.tab); };
+$('#mViewBtn').onclick = () => { closeMenu(); setView(effView() === 'list' ? 'week' : 'list'); };
+$('#monthToggle').onclick = () => { if (S.tickerOpen) S.miniMonth = startOfMonth(Date.now()); goToday(); };
+$('#menuBtn').onclick = openMenu;
+$('#menuDone').onclick = closeMenu;
+$('#quickBtn').onclick = () => openQuick();
+$('#searchBtn').onclick = openSearch;
+// ＋ : 고른 날(없으면 오늘)에 새 일정 편집 창. 오늘이면 다음 정시, 다른 날이면 오전 9시
+$('#addBtn').onclick = () => {
+  const d = S.selDay ?? startOfDay(S.cursor);
+  newEventAt(d === startOfDay(Date.now()) ? nextHour() : d + 9 * 3600e3);
+};
 
-// 날짜 줄: 좌우로 밀면 주(펼친 상태는 달) 이동, 아래로 당기면 펼침, 위로 밀면 접힘
+// 위 달력: 좌우로 밀면 달(접힌 상태는 주) 이동, 아래로 당기면 펼침, 위로 밀면 접힘
 let swipe = null;
 let swallowClickUntil = 0;
 const tickerEl = $('#ticker');
@@ -1213,16 +1355,18 @@ document.addEventListener('click', async (ev) => {
   if (pop && !t.closest('#dayPop')) closeDayPop();
   const moreBtn = t.closest('[data-more]');
   if (moreBtn) { openDayPop(fromDayKey(moreBtn.dataset.more), moreBtn); return; }
-  if (act === 'reset-demo') { resetDemo(); S.loaded = null; render(); toast('예시 일정을 처음 상태로 되돌렸습니다'); return; }
+  if (act === 'reset-demo') { resetDemo(); S.loaded = null; searchPool = null; render(); toast('예시 일정을 처음 상태로 되돌렸습니다'); return; }
 
   if (t.closest('#ticker')) {
     if (Date.now() < swallowClickUntil) return;
     if (t.closest('#tkGrab')) { toggleTicker(); return; }
   }
 
+  const sDay = t.closest('[data-sdate]');
+  if (sDay && !t.closest('[data-id]')) { closeSearch(); selectDay(fromDayKey(sDay.dataset.sdate)); return; }
   const evBtn = t.closest('[data-id]');
   if (evBtn && !t.closest('dialog')) {
-    const e = S.events.find((x) => x.id === evBtn.dataset.id);
+    const e = S.events.find((x) => x.id === evBtn.dataset.id) || searchPool?.evs.find((x) => x.id === evBtn.dataset.id);
     closeDayPop();
     if (e) openEditor(e);
     return;
@@ -1277,6 +1421,7 @@ document.addEventListener('change', (ev) => {
 // 단축키: t 오늘, d/w/m/l 보기, ←/→ 이동, n 빠른 입력
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape' && $('#dayPop')) { closeDayPop(); return; }
+  if (ev.key === 'Escape' && document.body.matches('.menu-open, .search-open')) { closeMenu(); closeSearch(); return; }
   if (ev.metaKey || ev.ctrlKey || ev.altKey || dlg.open) return;
   if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
   const k = ev.key;
@@ -1297,7 +1442,12 @@ addEventListener('resize', () => {
   resizeTimer = setTimeout(() => { if (effView() === 'month' && !S.needsLogin) { closeDayPop(); render(); } }, 150);
 });
 
-mq.addEventListener('change', () => { placeAccount(); if (!mq.matches) closeQuick(); S.jump = true; render(); });
+mq.addEventListener('change', () => {
+  placeAccount();
+  if (!mq.matches) { closeQuick(); closeMenu(); closeSearch(); } else loadWeather();
+  S.jump = true;
+  render();
+});
 
 // 현재 시각 선 갱신 + 다른 기기에서 바뀐 일정 반영
 setInterval(() => {
@@ -1306,7 +1456,8 @@ setInterval(() => {
   render({ refetch: stale });
 }, 60e3);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && useGoogle && !S.needsLogin) render({ refetch: true });
+  if (document.visibilityState === 'visible' && useGoogle && !S.needsLogin) { searchPool = null; render({ refetch: true }); }
+  if (document.visibilityState === 'visible' && mq.matches) loadWeather();
 });
 
 /* ---------- 시작 ---------- */
@@ -1326,8 +1477,8 @@ async function start() {
   }
   if (redirect?.ok) sessionStorage.removeItem('nanal.silentTried');
   placeAccount();
-  document.body.dataset.tab = S.tab;
   await render();
+  if (mq.matches) loadWeather();
   // ?q=문장 : 빠른 입력창을 채운 상태로 연다(공유 링크·화면 확인용, 저장은 하지 않음)
   if (params.get('q')) openQuick(params.get('q'));
 }
