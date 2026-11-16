@@ -4,5 +4,5 @@
 // 클라이언트 ID는 비밀번호가 아니라 공개 식별자라서 웹 코드에 들어가도 된다(클라이언트 보안 비밀번호는 쓰지 않음).
 export const CONFIG = {
   appName: "JB's 캘린더",
-  clientId: '', // 예: '1234567890-abcdefg.apps.googleusercontent.com'
+  clientId: '734164415540-t8pamupl2llnj1qhguajkp5qj387eebv.apps.googleusercontent.com', // 예: '1234567890-abcdefg.apps.googleusercontent.com'
 };
