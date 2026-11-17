@@ -650,6 +650,11 @@ input, select, textarea { font: inherit; color: inherit; }
   .mv-cell .chip i { width: 7px; height: 7px; }
   .mv-cell .chip .tt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
   .mv-cell .chip .ct { flex: none; font-size: 10px; color: var(--muted); }
+  /* 좁은 칸(사무실 1024px 창 등): 글자 크기·배치는 그대로 두고 시각 앞 「오전/오후」만 빼서 제목 자리를 넓힌다.
+     아주 좁으면 시각도 뺀다. 전체 제목·시간·장소는 마우스를 올리면 뜨는 설명에 */
+  .mv-cell { container-type: inline-size; }
+  @container (max-width: 135px) { .mv-cell .chip .ct .ap { display: none; } }
+  @container (max-width: 84px) { .mv-cell .chip .ct { display: none; } }
   .mv-cell .chip.live, .mv-cell .chip.picked { background: var(--c); }
   .mv-cell .chip.live .tt, .mv-cell .chip.picked .tt { color: #fff; font-weight: 600; }
   .mv-cell .chip.live .ct, .mv-cell .chip.picked .ct { color: rgb(255 255 255 / .85); }

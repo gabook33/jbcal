@@ -492,12 +492,12 @@ function renderUpcoming() {
       <h3 class="sa-h"><span><b>${name}</b> ${p.m + 1}/${p.d}</span>${wxHTML(d)}</h3>`;
     if (!evs.length && !tks.length) html += '<div class="ag-empty">일정 없음</div>';
     const ads = evs.filter((e) => e.allDay);
-    if (ads.length) html += `<div class="sa-ads">${ads.map((e) => `<button class="ag-ev sa-ad" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">${esc(e.title)}</button>`).join('')}</div>`;
+    if (ads.length) html += `<div class="sa-ads">${ads.map((e) => `<button class="ag-ev sa-ad" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>${esc(e.title)}</button>`).join('')}</div>`;
     html += tks.map((t) => taskRowHTML(t, 'sa-task', today)).join('');
     for (const e of evs) {
       if (e.allDay) continue;
       const cls = ['ag-ev', 'sa-ev', e.id === hl && 'hl', e.end < now && 'past'].filter(Boolean).join(' ');
-      html += `<button class="${cls}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">
+      html += `<button class="${cls}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>
         <i></i><span class="sa-t">${mTimeRange(e, d)}</span><span class="sa-title">${esc(e.title)}</span>
       </button>`;
     }
@@ -532,7 +532,7 @@ function listHTML(from, days) {
         ? '<span class="ag-t1">종일</span>'
         : `<span class="ag-t1">${e.start < d ? '…' : fmtTime(e.start)}</span><small>${e.end > d + DAY ? '…' : fmtTime(e.end)}</small>`;
       const past = !e.allDay && e.end < now ? ' past' : '';
-      html += `<button class="ag-ev${past}${e.allDay ? ' allday' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">
+      html += `<button class="ag-ev${past}${e.allDay ? ' allday' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>
         <span class="ag-time">${time}</span>
         <span class="ag-bar"></span>
         <span class="ag-body"><span class="ag-title">${esc(e.title)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}</span>
@@ -558,13 +558,13 @@ function mTimeRange(e, d) {
 }
 function mEventsHTML(evs, d, now, tasks = []) {
   const ads = evs.filter((e) => e.allDay);
-  let html = ads.length ? `<div class="m-ads">${ads.map((e) => `<button class="ag-ev m-allday" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"><span class="ag-title">${esc(e.title)}</span></button>`).join('')}</div>` : '';
+  let html = ads.length ? `<div class="m-ads">${ads.map((e) => `<button class="ag-ev m-allday" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}><span class="ag-title">${esc(e.title)}</span></button>`).join('')}</div>` : '';
   // 할 일: 종일 이름표 다음, 시간 일정 앞에 체크 상자 모양으로
   html += tasks.map((t) => taskRowHTML(t, 'm-task', startOfDay(now))).join('');
   for (const e of evs) {
     if (e.allDay) continue;
     const past = e.end < now ? ' past' : '';
-    html += `<button class="ag-ev m-ev${past}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">
+    html += `<button class="ag-ev m-ev${past}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>
       <i class="m-dot"></i><span class="m-time">${mTimeRange(e, d)}</span>
       <span class="ag-title">${esc(e.title)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}
     </button>`;
@@ -687,7 +687,7 @@ function renderCals() {
     <label class="cal-item" style="--c:${c.color}">
       <input type="checkbox" data-cal="${esc(c.id)}" ${S.hidden.has(c.id) ? '' : 'checked'}>
       <span class="cal-check"></span>
-      <span class="cal-name">${esc(c.name)}</span>
+      <span class="cal-name"${tipAttr(c.name)}>${esc(c.name)}</span>
       ${c.readOnly ? '<span class="cal-ro">읽기 전용</span>' : ''}
     </label>`).join('')
     // 할 일(Google Tasks)도 날짜별 목록에서 켜고 끌 수 있게
@@ -804,7 +804,7 @@ function timeGridHTML(days) {
       const h = Math.max(((end - s) / 60) * HH - 2, 18);
       const short = h < 36;
       const w = 100 / cnt;
-      return `<button class="tg-ev${short ? ' short' : ''}${ev.end < now ? ' past' : ''}" data-id="${esc(ev.id)}"
+      return `<button class="tg-ev${short ? ' short' : ''}${ev.end < now ? ' past' : ''}" data-id="${esc(ev.id)}"${tipAttr(evTip(ev))}
         style="--c:${colorOf(ev)};top:${top}px;height:${h}px;left:calc(${col * w}% + 1px);width:calc(${w}% - 3px)">
         <span class="t">${esc(ev.title)}</span>
         ${short ? `<span class="tm">${fmtTime(ev.start)}</span>` : `<span class="tm">${fmtTime(ev.start)} – ${fmtTime(ev.end)}</span>`}
@@ -830,13 +830,31 @@ function fmtShort(ts) {
 /** 지금 진행 중이거나 오른쪽 클릭으로 고른 일정: 색을 채워 보인다 */
 const isLive = (e, now = Date.now()) => e.id === S.picked || (!e.allDay && e.start <= now && e.end > now);
 
+/* ---------- 마우스를 올리면 뜨는 설명(title): 잘린 제목도 전체 제목·시간·장소를 볼 수 있게 ---------- */
+const tipAttr = (s) => (s ? ` title="${esc(s)}"` : '');
+/** 일정: 제목 / 날짜·시간 / 장소 */
+const evTip = (e) => eventText(e, false);
+/** 할 일: 제목 / 마감일 / 목록(여럿일 때) */
+function taskTip(t) {
+  return [t.title || '(제목 없음)', t.done ? '완료함' : '', t.due != null ? `마감: ${fmtDate(t.due, true)}` : '마감일 없음',
+    S.taskLists.length > 1 && listName(t.listId) ? `목록: ${listName(t.listId)}` : ''].filter(Boolean).join('\n');
+}
+/** 하루 여러 일정 요약(「+N개 더」·연 보기 날짜): 머리 + 「· 시각 제목 (장소)」 줄 */
+function dayTip(d, evs, n = evs.length) {
+  const p = P(d);
+  const line = (e) => `· ${e.allDay || e.start < d ? '종일' : fmtTime(e.start)} ${e.title}${e.location ? ` (${e.location})` : ''}`;
+  return [`${p.m + 1}월 ${p.d}일 (${WD[p.dow]}) ${n === evs.length ? '' : '그 밖에 '}일정 ${n}개`, ...evs.map(line)].join('\n');
+}
+
 function chipHTML(e, filled = false) {
   const c = colorOf(e);
   if (filled || e.allDay) {
-    return `<button class="chip fill" data-id="${esc(e.id)}" style="--c:${c}">${esc(e.title)}</button>`;
+    return `<button class="chip fill" data-id="${esc(e.id)}" style="--c:${c}"${tipAttr(evTip(e))}>${esc(e.title)}</button>`;
   }
   // 월 보기: 한 줄 = 색 점 + 제목(넘치면 …) + 오른쪽 작은 회색 시각
-  return `<button class="chip${isLive(e) ? ' live' : ''}" data-id="${esc(e.id)}" style="--c:${c}"><i></i><span class="tt">${esc(e.title)}</span><span class="ct">${fmtShort(e.start)}</span></button>`;
+  // 칸이 좁으면 CSS 가 시각 앞 「오전/오후」(.ap)를 숨겨 제목 자리를 넓힌다(전체 시각은 툴팁에)
+  const [ap, hm] = fmtShort(e.start).split(' ');
+  return `<button class="chip${isLive(e) ? ' live' : ''}" data-id="${esc(e.id)}" style="--c:${c}"${tipAttr(evTip(e))}><i></i><span class="tt">${esc(e.title)}</span><span class="ct"><span class="ap">${ap} </span>${hm}</span></button>`;
 }
 
 /** 월 보기 한 주 줄 높이: 화면에 여섯 주가 보이게(원본처럼). 낮은 창은 최소 92px */
@@ -874,8 +892,12 @@ function fitMonth(root, rowH) {
   const grow = new Map();
   for (const { cell, chips, n, hidden, need } of plan) {
     for (let i = n; i < chips.length; i++) chips[i].remove();
-    const p = P(fromDayKey(cell.dataset.day));
-    cell.insertAdjacentHTML('beforeend', `<button class="more" data-more="${cell.dataset.day}" aria-label="${p.m + 1}월 ${p.d}일 일정 모두 보기">+${hidden}개 더</button>`);
+    const d = fromDayKey(cell.dataset.day);
+    const p = P(d);
+    // 툴팁: 칸에 안 보이는 일정(잘라낸 칩 + 줄이 모자라 못 그린 종일 막대)
+    const seen = new Set([...cell.querySelectorAll('.chip'), ...cell.parentElement.querySelectorAll(':scope > .mv-bar')].map((x) => x.dataset.id));
+    const rest = visibleEvents(d, d + DAY).filter((e) => !seen.has(e.id));
+    cell.insertAdjacentHTML('beforeend', `<button class="more" data-more="${cell.dataset.day}" aria-label="${p.m + 1}월 ${p.d}일 일정 모두 보기"${tipAttr(dayTip(d, rest, hidden))}>+${hidden}개 더</button>`);
     if (need > rowH) grow.set(cell.parentElement, Math.max(grow.get(cell.parentElement) || 0, need));
   }
   grow.forEach((h, week) => { week.style.height = `${Math.ceil(h)}px`; });
@@ -900,7 +922,7 @@ function weekBars(w, now) {
     const multi = Math.round((startOfDay(e.end - 1) - startOfDay(e.start)) / DAY) >= 1;
     const cls = ['mv-bar', multi && 'multi', e.start < w && 'cl', e.end > w + WEEK && 'cr', isLive(e, now) && 'live',
       !e.allDay && 'timed'].filter(Boolean).join(' ');
-    bars.push(`<button class="${cls}" data-id="${esc(e.id)}" style="--c:${colorOf(e)};--l:${lane};left:calc(${sc} * 100% / 7 + 3px);width:calc(${ec - sc + 1} * 100% / 7 - 6px)" title="${esc(e.title)}">${esc(e.title)}</button>`);
+    bars.push(`<button class="${cls}" data-id="${esc(e.id)}" style="--c:${colorOf(e)};--l:${lane};left:calc(${sc} * 100% / 7 + 3px);width:calc(${ec - sc + 1} * 100% / 7 - 6px)"${tipAttr(evTip(e))}>${esc(e.title)}</button>`);
   }
   return { bars: bars.join(''), lanes: Math.min(laneEnd.length, MAX_LANES), extra };
 }
@@ -959,8 +981,8 @@ function quarterHTML() {
       const inM = p.m === mp.m;
       const evs = inM ? visibleEvents(d, d + DAY) : [];
       const cls = ['qv-cell', !inM && 'other', d === today && 'today', d === S.selDay && 'sel', (p.dow === 0 || p.dow === 6) && 'wkend'].filter(Boolean).join(' ');
-      const items = evs.slice(0, 3).map((e) => `<button class="qv-ev${e.allDay ? ' ad' : ''}${isLive(e, now) ? ' live' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">${esc(e.title)}</button>`).join('');
-      cells += `<div class="${cls}" data-day="${dayKey(d)}"><span class="qv-d">${inM ? p.d : ''}</span>${items}${evs.length > 3 ? `<button class="more" data-more="${dayKey(d)}">+${evs.length - 3}</button>` : ''}</div>`;
+      const items = evs.slice(0, 3).map((e) => `<button class="qv-ev${e.allDay ? ' ad' : ''}${isLive(e, now) ? ' live' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>${esc(e.title)}</button>`).join('');
+      cells += `<div class="${cls}" data-day="${dayKey(d)}"><span class="qv-d">${inM ? p.d : ''}</span>${items}${evs.length > 3 ? `<button class="more" data-more="${dayKey(d)}"${tipAttr(dayTip(d, evs.slice(3), evs.length - 3))}>+${evs.length - 3}</button>` : ''}</div>`;
     }
     return `<section class="qv-m"><h3 class="qv-t">${mp.m + 1}월</h3>
       <div class="qv-wd">${wdOrder().map((i) => `<span>${WD[i]}</span>`).join('')}</div>
@@ -984,7 +1006,7 @@ function yearHTML() {
       if (p.m !== mp.m) { cells += '<span class="yv-day other"></span>'; continue; }
       const evs = visibleEvents(d, d + DAY);
       const cls = ['yv-day', d === today && 'today', d === S.selDay && 'sel', evs.some(isHoliday) && 'hol', evs.length && 'has'].filter(Boolean).join(' ');
-      cells += `<button class="${cls}" data-day="${dayKey(d)}" style="--c:${evs.length ? colorOf(evs[0]) : 'transparent'}" aria-label="${p.m + 1}월 ${p.d}일${evs.length ? `, 일정 ${evs.length}개` : ''}">${p.d}</button>`;
+      cells += `<button class="${cls}" data-day="${dayKey(d)}" style="--c:${evs.length ? colorOf(evs[0]) : 'transparent'}" aria-label="${p.m + 1}월 ${p.d}일${evs.length ? `, 일정 ${evs.length}개` : ''}"${evs.length ? tipAttr(dayTip(d, evs)) : ''}>${p.d}</button>`;
     }
     return `<section class="yv-m${P(today).y === mp.y && P(today).m === mp.m ? ' now' : ''}"><h3 class="yv-t" data-goto-month="${dayKey(m)}">${mp.m + 1}월</h3>
       <div class="yv-grid">${wdOrder().map((i) => `<span class="yv-wd">${WD[i]}</span>`).join('')}${cells}</div></section>`;
@@ -1034,7 +1056,7 @@ function openDayPop(d, anchor) {
     const time = e.allDay
       ? '종일'
       : `${e.start < d ? '…' : fmtTime(e.start)}<small>${e.end > d + DAY ? '…' : fmtTime(e.end)}</small>`;
-    return `<button class="ag-ev${!e.allDay && e.end < now ? ' past' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">
+    return `<button class="ag-ev${!e.allDay && e.end < now ? ' past' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>
       <span class="ag-time">${time}</span>
       <span class="ag-bar"></span>
       <span class="ag-body"><span class="ag-title">${esc(e.title)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}</span>
@@ -1400,7 +1422,7 @@ function taskRowHTML(t, kind, today) {
     // 할 일 화면: 「오늘」「내일」 묶음 안에서는 마감일을 다시 쓰지 않는다
     ? [t.due != null && (t.done || t.due < today || t.due > today + DAY) ? dueLabel(t.due, today) : '', S.taskLists.length > 1 ? listName(t.listId) : ''].filter(Boolean).join(' · ')
     : over ? `${dueLabel(t.due, today)} 마감` : '';
-  return `<div class="tsk ${kind}${t.done ? ' done' : ''}${over ? ' over' : ''}" data-task="${esc(t.id)}" role="button" tabindex="0" style="--c:${taskColor()}">
+  return `<div class="tsk ${kind}${t.done ? ' done' : ''}${over ? ' over' : ''}" data-task="${esc(t.id)}" role="button" tabindex="0" style="--c:${taskColor()}"${tipAttr(taskTip(t))}>
     <button type="button" class="tsk-box" data-tcheck="${esc(t.id)}" role="checkbox" aria-checked="${t.done}" aria-label="${t.done ? '완료 취소' : '완료로 표시'}"></button>
     <span class="tsk-title">${esc(t.title || '(제목 없음)')}</span>${meta ? `<span class="tsk-meta">${esc(meta)}</span>` : ''}
   </div>`;
@@ -1787,7 +1809,7 @@ async function runDSearch() {
     for (const [d, evs] of days) {
       html += `<section class="ag-day${d === today ? ' today' : ''}" data-sdate="${dayKey(d)}"><h3 class="ag-h">${esc(fmtDayHeading(d, now))}${P(d).y !== P(today).y ? ` ${P(d).y}` : ''}</h3>`;
       for (const e of evs) {
-        html += `<button class="ag-ev${!e.allDay && e.end < now ? ' past' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}">
+        html += `<button class="ag-ev${!e.allDay && e.end < now ? ' past' : ''}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>
           <span class="ag-time">${e.allDay ? '종일' : fmtTime(e.start)}</span><span class="ag-bar"></span>
           <span class="ag-body"><span class="ag-title">${esc(e.title)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}</span>
         </button>`;
@@ -1917,11 +1939,11 @@ function eventMenu(e) {
     { label: '이메일로 보내기', act: () => { location.href = `mailto:?subject=${encodeURIComponent(e.title)}&body=${encodeURIComponent(eventText(e))}`; } },
   ];
 }
-function eventText(e) {
+function eventText(e, withNote = true) {
   const when = e.allDay
     ? `${fmtDate(e.start, true)}${e.end - e.start > DAY ? ` – ${fmtDate(e.end - DAY, true)}` : ''} (종일)`
     : `${fmtDate(e.start, true)} ${fmtTime(e.start)} – ${sameDay(e.start, e.end - 1) ? '' : `${fmtDate(e.end)} `}${fmtTime(e.end)}`;
-  return [e.title, when, e.location && `장소: ${e.location}`, e.note].filter(Boolean).join('\n');
+  return [e.title, when, e.location && `장소: ${e.location}`, withNote && e.note].filter(Boolean).join('\n');
 }
 async function duplicateEvent(e) {
   const cal = e.readOnly ? defaultCal() : calById(e.calendarId);
