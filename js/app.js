@@ -1140,7 +1140,7 @@ function closeDayPop() {
 function renderWelcome() {
   $('#view').className = 'view';
   $('#view').innerHTML = `<div class="welcome">
-    <img src="icons/icon-v12.svg" alt="" width="72" height="72">
+    <img src="icons/icon-v14.svg" alt="" width="72" height="72">
     <h2>${esc(CONFIG.appName)}에 오신 것을 환영합니다</h2>
     <p>구글 캘린더를 연결하면 일정을 보고, 추가하고, 고칠 수 있어요.</p>
     <button class="btn primary big" data-act="login">구글 캘린더 연결</button>
