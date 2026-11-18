@@ -1067,7 +1067,7 @@ body.is-dragging { cursor: grabbing; user-select: none; }
   /* ☰ 시트에도 설정(주 시작 제외)·캘린더 묶음 */
   .sidebar .cal-set { display: block; background: var(--card); border-radius: var(--r); margin-top: 14px; padding: 6px 14px; border: 0; }
   .sidebar .cs-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; font-size: 16px; color: var(--text); }
-  .sidebar .cs-row + .cs-row { border-top: var(--hair) solid var(--line); }
+  .sidebar .cs-row + .cs-row, .sidebar #notifMore + .cs-row { border-top: var(--hair) solid var(--line); }
   .sidebar .cs-row select { font-size: 16px; border: 0; background: transparent; color: var(--accent); text-align: right; }
   .sidebar .cs-row:first-child { display: none; } /* 휴대폰은 늘 일요일 시작 */
   .sidebar .cs-btns .link-btn, .sidebar #unhideBtn { font-size: 15px; padding: 8px 0; }
@@ -1076,4 +1076,56 @@ body.is-dragging { cursor: grabbing; user-select: none; }
   #view.v-day .tg, #view.v-week .tg, #view.v-day .tg-scroll, #view.v-week .tg-scroll { touch-action: pan-y; }
   .m-menu-acts button { font-size: 15px; min-width: calc(50% - 5px); }
   #calList .cal-color { width: 22px; height: 22px; }
+}
+
+/* ---------- 2026-11-19: 첨부·연락처·가용 시간·내 응답·Zoom/Teams·이동 시간·이 기기 알림 ---------- */
+.bdg.join.k-Zoom { background: #2d8cff; }
+.bdg.join.k-Teams { background: #5b5fc7; }
+.bdg.join.k-Webex { background: #07a35a; }
+.files-row, .att-row { position: relative; }
+.file-list { display: flex; flex-direction: column; gap: 4px; }
+.file-list:empty { display: none; }
+.file { display: flex; align-items: center; gap: 6px; background: var(--grouped); border-radius: 8px; padding: 5px 6px 5px 9px; font-size: 13px; }
+.file a { flex: 1; min-width: 0; color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file a::before { content: "📎 "; }
+.file-btns, .conf-new { display: flex; flex-wrap: wrap; gap: 2px 14px; }
+.file-btns .link-btn, .conf-new .link-btn, .fb-btn { margin: 0; text-decoration: none; }
+.fb-btn { justify-self: start; }
+.row.conf-row { grid-template-columns: 76px 1fr; }
+.att-in-wrap { position: relative; }
+.att-sug { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; background: var(--panel, var(--card)); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgb(0 0 0 / .18); overflow: hidden; }
+.att-sug button { display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left; padding: 8px 10px; font-size: 14px; color: var(--text); }
+.att-sug button small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.att-sug button.on, .att-sug button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.att-sug .sug-need { color: var(--accent); }
+.rsvp-btns { display: flex; gap: 6px; justify-content: flex-end; }
+.rsvp-btns button { border-radius: 99px; padding: 4px 12px; font-size: 13px; background: var(--grouped); color: var(--text); }
+.rsvp-btns button.on[data-rsvp=accepted] { background: #34c759; color: #fff; }
+.rsvp-btns button.on[data-rsvp=tentative] { background: #8e8e93; color: #fff; }
+.rsvp-btns button.on[data-rsvp=declined] { background: #ff3b30; color: #fff; }
+/* 가용 시간: 사람마다 한 줄, 바쁜 시간은 회색, 지금 일정 시간은 파란 테두리 */
+.fb { font-size: 12px; color: var(--muted); }
+.fb-axis, .fb-line { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 6px; margin: 3px 0; }
+.fb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.fb-bar { position: relative; height: 16px; border-radius: 4px; background: color-mix(in srgb, #34c759 16%, var(--grouped)); overflow: hidden; }
+.fb-bar i { position: absolute; top: 0; bottom: 0; background: #8e8e93; opacity: .75; }
+.fb-bar b { position: absolute; top: 0; bottom: 0; border: 2px solid var(--accent); border-radius: 3px; }
+.fb-bar.err { background: repeating-linear-gradient(45deg, var(--grouped) 0 6px, transparent 6px 12px); }
+.fb-ticks { position: relative; height: 12px; }
+.fb-ticks span { position: absolute; transform: translateX(-50%); font-size: 10px; white-space: nowrap; }
+.fb-sug { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.fb-sug button { border-radius: 99px; padding: 3px 10px; background: color-mix(in srgb, var(--accent) 12%, var(--card)); color: var(--accent); font-size: 12.5px; }
+.tv-row { grid-template-columns: 56px 1fr; }
+.tv-in { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.tv-in .link-btn { margin: 0; }
+.tv-txt { color: var(--text); font-size: 13px; }
+.tv-txt label { color: var(--muted); font-size: 12px; display: inline-flex; gap: 4px; align-items: center; margin-left: 6px; }
+.tv-links a { margin-right: 12px; color: var(--accent); text-decoration: none; }
+.cs-row input[type=text] { width: 140px; border: 0; border-radius: 6px; padding: 3px 6px; font-size: 12.5px; background: #3a3a3c; color: #f2f2f7; }
+.qs-paste { position: absolute; right: 8px; top: 7px; font-size: 12px; color: var(--accent); padding: 3px 8px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.quick:has(.qs-paste:not([hidden])) input { padding-right: 78px; }
+.feat-st { font-size: 12px; color: var(--muted); }
+@media (max-width: 760px) {
+  .sidebar .cs-row input[type=text] { font-size: 16px; background: transparent; color: var(--accent); text-align: right; width: 60%; }
+  .qs-paste { top: 12px; }
 }

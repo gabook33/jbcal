@@ -34,6 +34,7 @@
           <svg class="quick-icon" viewBox="0 0 24 24" width="18" height="18"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
           <input id="quick" type="text" enterkeyhint="done"
             placeholder="빠른 입력: 내일 오후 3시 팀 회의 @본관 /업무" aria-label="자연어로 일정 추가">
+          <button type="button" class="qs-paste" id="qsPaste" hidden title="클립보드 글 붙여넣기">붙여넣기</button>
           <div class="quick-preview" id="quickPreview" hidden></div>
         </form>
         <p class="qs-hint">예) 내일 오후 3시 팀 회의 @본관 /업무 · 매주 월수금 9시 스탠드업 · 격주 금요일 3시 보고 12월 31일까지 · 내일 2시 면담 알림 10분 전 · 할 일: 보고서 제출</p>
@@ -98,6 +99,10 @@
             </select>
           </label>
           <label class="cs-row">주 번호 표시 <input type="checkbox" id="weekNumChk"></label>
+          <label class="cs-row">이 기기 알림 <input type="checkbox" id="notifChk"></label>
+          <div class="cs-btns" id="notifMore" hidden><button type="button" class="link-btn" id="notifTest">시험 알림</button><button type="button" class="link-btn" id="notifCals">캘린더별 알림 끄기…</button></div>
+          <label class="cs-row">출발지 <input type="text" id="originIn" placeholder="비우면 현재 위치" aria-label="이동 시간 출발지"></label>
+          <div class="cs-btns"><button type="button" class="link-btn" id="calManage">캘린더 추가·구독…</button><button type="button" class="link-btn" id="featBtn">구글 추가 권한…</button></div>
           <div class="cs-row cs-sets">캘린더 묶음
             <select id="setSel" aria-label="캘린더 묶음"></select>
           </div>
@@ -245,16 +250,37 @@
       </div>
       <div class="ed-group">
         <label class="row">장소 <input name="location" placeholder="장소 추가"></label>
+        <div class="row tv-row" id="edTvRow" hidden><span>이동</span>
+          <span class="tv-in"><button type="button" class="link-btn" id="edTvBtn">이동 시간 계산</button><span class="tv-txt" id="edTvTxt"></span></span>
+        </div>
+        <p class="ed-sub tv-links" id="edTvLinks" hidden></p>
         <label class="row">URL <input name="url" type="url" inputmode="url" placeholder="https://"></label>
         <label class="row col">메모 <textarea name="note" rows="3" placeholder="메모"></textarea></label>
+        <div class="row col files-row"><span>첨부</span>
+          <div class="file-list" id="edFiles"></div>
+          <span class="file-btns"><button type="button" class="link-btn" id="edFileUp">＋ 파일 올리기(구글 드라이브)</button><button type="button" class="link-btn" id="edFileLink">＋ 드라이브 링크 붙이기</button></span>
+          <input type="file" id="edFileIn" hidden>
+        </div>
       </div>
       <div class="ed-group">
+        <div class="row rsvp-row" id="edRsvp" hidden><span>내 응답</span>
+          <span class="rsvp-btns"><button type="button" data-rsvp="accepted">수락</button><button type="button" data-rsvp="tentative">미정</button><button type="button" data-rsvp="declined">거절</button></span>
+        </div>
         <div class="row col att-row"><span>참석자</span>
           <div class="att-list" id="edAtt"></div>
-          <input name="attIn" type="email" inputmode="email" enterkeyhint="done" placeholder="이메일 넣고 Enter" aria-label="참석자 이메일 추가">
+          <div class="att-in-wrap">
+            <input name="attIn" type="text" inputmode="email" enterkeyhint="done" autocomplete="off" placeholder="이름 또는 이메일 넣고 Enter" aria-label="참석자 이름·이메일 추가">
+            <div class="att-sug" id="edAttSug" role="listbox" hidden></div>
+          </div>
+          <button type="button" class="link-btn fb-btn" id="edFbBtn">가용 시간 확인</button>
+          <div class="fb" id="edFb" hidden></div>
         </div>
         <label class="row switch" id="edNotifyRow" hidden>참석자에게 메일 보내기 <input type="checkbox" name="notify"></label>
         <label class="row switch" id="edMeetRow">Google Meet 화상회의 추가 <input type="checkbox" name="addMeet"></label>
+        <div class="row conf-row" id="edConfRow"><span>Zoom·Teams</span>
+          <span class="conf-new"><a class="link-btn" id="edZoomNew" target="_blank" rel="noopener">Zoom 회의 만들기 ↗</a><a class="link-btn" id="edTeamsNew" target="_blank" rel="noopener">Teams 회의 만들기 ↗</a></span>
+        </div>
+        <p class="ed-sub" id="edConfHint">만든 회의 링크를 URL 칸(또는 메모)에 붙여 넣으면 목록에 「참가」 버튼이 생깁니다.</p>
       </div>
       <a class="ed-link" id="edMeet" target="_blank" rel="noopener" hidden>화상회의 참가 ↗</a>
       <a class="ed-link" id="edUrl" target="_blank" rel="noopener" hidden>URL 열기 ↗</a>

@@ -7,6 +7,8 @@ import { truncateBefore } from './recur.js';
 
 const API = 'https://www.googleapis.com/calendar/v3';
 const TASKS_API = 'https://tasks.googleapis.com/tasks/v1';
+const PEOPLE_API = 'https://people.googleapis.com/v1';
+const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 const AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const CAL_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
@@ -14,6 +16,21 @@ export const CAL_SCOPES = [
 ];
 export const TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
 export const SCOPES = [...CAL_SCOPES, TASKS_SCOPE].join(' ');
+/** 기능별 추가 권한: 그 기능을 처음 쓸 때만 따로 동의를 받는다(incremental auth). 기존 기능은 위 권한만으로 동작한다 */
+export const SCOPE = {
+  drive: 'https://www.googleapis.com/auth/drive.file', // 이 앱으로 올린 파일만
+  contacts: 'https://www.googleapis.com/auth/contacts.readonly',
+  otherContacts: 'https://www.googleapis.com/auth/contacts.other.readonly', // 메일 주고받은 「기타 연락처」
+  freebusy: 'https://www.googleapis.com/auth/calendar.freebusy',
+  calList: 'https://www.googleapis.com/auth/calendar.calendarlist', // 캘린더 목록 색·구독
+  calCreate: 'https://www.googleapis.com/auth/calendar.app.created', // 이 앱이 만든 캘린더만
+};
+export const FEATURES = {
+  attach: { name: '드라이브 파일 첨부', scopes: [SCOPE.drive], what: '이 앱으로 올린 구글 드라이브 파일만 보고 관리(다른 드라이브 파일은 못 봄)' },
+  contacts: { name: '연락처 이름으로 참석자 찾기', scopes: [SCOPE.contacts, SCOPE.otherContacts], what: '구글 주소록과 기타 연락처 읽기(바꾸지 않음)' },
+  freebusy: { name: '가용 시간 조회', scopes: [SCOPE.freebusy], what: '내 캘린더와 참석자 캘린더의 바쁜 시간만 보기(일정 내용은 안 봄)' },
+  calendars: { name: '구글 캘린더 색·구독·새 캘린더', scopes: [SCOPE.calList, SCOPE.calCreate], what: '캘린더 목록 색 바꾸기·구독 추가, 이 앱이 만든 새 캘린더 관리' },
+};
 const K_TOKEN = 'nanal.gtoken';
 const K_STATE = 'nanal.oauthState';
 const K_LINKED = 'nanal.linked';
@@ -57,8 +74,14 @@ export function fromGoogle(ev, cal) {
     ...(ev.transparency === 'transparent' ? { free: true } : {}),
     ...(ev.visibility && ev.visibility !== 'default' ? { visibility: ev.visibility } : {}),
     ...(ev.reminders ? { reminder: reminderFromGoogle(ev.reminders) } : {}),
+    ...(ev.attachments?.length ? { attachments: ev.attachments.map(attachFromGoogle) } : {}),
   };
 }
+/** 첨부(구글 드라이브 파일 링크) */
+export const attachFromGoogle = (a) => ({
+  fileUrl: a.fileUrl, title: a.title || '첨부 파일',
+  ...(a.mimeType ? { mimeType: a.mimeType } : {}), ...(a.iconLink ? { iconLink: a.iconLink } : {}), ...(a.fileId ? { fileId: a.fileId } : {}),
+});
 
 const attFromGoogle = (a) => ({
   email: a.email || '', name: a.displayName || '', status: a.responseStatus || 'needsAction',
@@ -114,6 +137,8 @@ export function toGoogle(e) {
       ...(a.name ? { displayName: a.name } : {}),
     }));
   }
+  // 첨부: 앱에서 바꿨을 때만 보낸다(빈 배열 = 모두 빼기)
+  if (e.attachments !== undefined && e.attachmentsChanged) body.attachments = e.attachments.map(attachFromGoogle);
   if (e.addMeet) {
     body.conferenceData = { createRequest: { requestId: `jbcal-${Date.now().toString(36)}`, conferenceSolutionKey: { type: 'hangoutsMeet' } } };
   }
@@ -135,6 +160,9 @@ export function calFromGoogle(c) {
     primary: !!c.primary,
     readOnly: !['owner', 'writer'].includes(c.accessRole),
     visible: c.selected !== false,
+    owner: c.accessRole === 'owner',
+    // 캘린더 기본 알림(이 기기 알림에서 「기본」 알림 시각으로 쓴다)
+    defaultReminders: (c.defaultReminders || []).filter((r) => r.method === 'popup').map((r) => r.minutes),
   };
 }
 
@@ -159,19 +187,23 @@ export function redirectUri() {
 /** 구글이 허락한 권한 범위. 할 일(Tasks) 권한이 생기기 전에 연결한 기기는 비어 있다 */
 export const grantedScopes = () => (localStorage.getItem(K_SCOPES) || '').split(/\s+/).filter(Boolean);
 export const hasTasksScope = () => grantedScopes().includes(TASKS_SCOPE);
+/** 기능 권한: all=모든 권한 / some=하나라도(연락처처럼 동의 화면에서 일부만 고를 수 있는 것) */
+export const hasScope = (s) => grantedScopes().includes(s);
+export const hasFeature = (f, some = false) => FEATURES[f].scopes[some ? 'some' : 'every'](hasScope);
 
 /** 로그인 화면으로 보낸다.
  *  조용한 갱신(prompt=none)은 캘린더 권한만 청한다: 아직 허락받지 않은 할 일 권한을 섞으면 구글이 동의 화면이 필요하다며
  *  거절하므로 캘린더까지 끊긴다. include_granted_scopes 덕분에 이미 허락한 할 일 권한은 새 토큰에 그대로 따라온다.
  *  사용자가 누른 로그인(silent 아님)은 캘린더 + 할 일을 같이 청한다 → 기존 사용자는 할 일 권한만 한 번 더 묻는다. */
-export function beginLogin(clientId, { silent = false } = {}) {
+export function beginLogin(clientId, { silent = false, scopes = null } = {}) {
   const state = crypto.getRandomValues(new Uint32Array(4)).join('-');
   sessionStorage.setItem(K_STATE, state);
   const q = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri(),
     response_type: 'token',
-    scope: silent ? CAL_SCOPES.join(' ') : SCOPES,
+    // scopes: 기능 추가 동의(캘린더 권한 + 그 기능 권한만 청한다. 이미 허락한 할 일 권한은 include_granted_scopes 로 따라온다)
+    scope: scopes ? [...CAL_SCOPES, ...scopes].join(' ') : silent ? CAL_SCOPES.join(' ') : SCOPES,
     include_granted_scopes: 'true',
     state,
   });
@@ -213,19 +245,22 @@ export async function logout() {
 /* ---------- API ---------- */
 
 export class AuthError extends Error {}
-/** 할 일: 토큰에 Tasks 권한이 없음(다시 동의 필요) */
-export class ScopeError extends Error {}
+/** 토큰에 그 기능 권한이 없음(다시 동의 필요). scopes: 빠진 권한 */
+export class ScopeError extends Error {
+  constructor(msg, scopes = []) { super(msg); this.scopes = scopes; }
+}
 /** 할 일: 구글 클라우드 프로젝트에서 Tasks API 가 꺼져 있음 */
 export class ApiDisabledError extends Error {}
 
-async function call(path, { method = 'GET', body, query, base = API, label = '구글 캘린더' } = {}) {
+/** need: 이 요청에 드는 기능 권한(권한 부족 오류면 저장해 둔 허락 목록에서 뺀다) */
+async function call(path, { method = 'GET', body, raw, headers = {}, query, base = API, label = '구글 캘린더', need = [] } = {}) {
   const token = getToken();
   if (!token) throw new AuthError('로그인이 필요합니다');
   const url = `${base}${path}${query ? `?${new URLSearchParams(query)}` : ''}`;
   const res = await fetch(url, {
     method,
-    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    body: raw ?? (body ? JSON.stringify(body) : undefined),
   });
   if (res.status === 401) {
     localStorage.removeItem(K_TOKEN);
@@ -239,8 +274,8 @@ async function call(path, { method = 'GET', body, query, base = API, label = '�
       const why = JSON.stringify(err || {});
       if (/SERVICE_DISABLED|accessNotConfigured|has not been used|is disabled/i.test(why)) throw new ApiDisabledError(msg);
       if (/insufficient|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(why)) {
-        localStorage.setItem(K_SCOPES, grantedScopes().filter((x) => x !== TASKS_SCOPE).join(' '));
-        throw new ScopeError(msg);
+        localStorage.setItem(K_SCOPES, grantedScopes().filter((x) => !need.includes(x)).join(' '));
+        throw new ScopeError(msg, need);
       }
     }
     throw new Error(`${label} 오류: ${msg}`);
@@ -329,10 +364,119 @@ export const googleStore = {
   async restoreInstance(e) {
     await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'PATCH', body: { status: 'confirmed' }, query: { sendUpdates: 'none' } });
   },
+
+  /** 내 응답(수락·미정·거절): 참석자 목록에서 내 응답만 바꿔 보낸다(지금 권한으로 됨, 메일은 보내지 않음) */
+  async respond(e, status) {
+    const attendees = e.attendees.map((a) => ({
+      email: a.email, responseStatus: a.self ? status : a.status || 'needsAction',
+      ...(a.optional ? { optional: true } : {}), ...(a.name ? { displayName: a.name } : {}),
+    }));
+    await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'PATCH', body: { attendees }, query: { sendUpdates: 'none' } });
+  },
+
+  /* ----- 아래는 기능별 추가 권한이 드는 것(처음 쓸 때 동의) ----- */
+
+  /** 가용 시간: {이메일·캘린더ID: [{start, end}]}. 볼 수 없는 캘린더는 {error} */
+  async freeBusy(ids, from, to) {
+    const r = await call('/freeBusy', {
+      method: 'POST', need: [SCOPE.freebusy],
+      body: { timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), timeZone: TZ, items: ids.map((id) => ({ id })) },
+    });
+    return freeBusyFromGoogle(r);
+  },
+  /** 연락처 이름·이메일 찾기: 주소록 + 기타 연락처(허락한 것만) */
+  async searchContacts(q) {
+    const out = [];
+    const jobs = [];
+    // 구글 안내대로 처음 한 번은 빈 검색으로 캐시를 데운다
+    if (!peopleWarm) {
+      peopleWarm = true;
+      await Promise.all([
+        hasScope(SCOPE.contacts) && peopleSearch('/people:searchContacts', '', 'names', [SCOPE.contacts]).catch(() => null),
+        hasScope(SCOPE.otherContacts) && peopleSearch('/otherContacts:search', '', 'names', [SCOPE.otherContacts]).catch(() => null),
+      ]);
+    }
+    if (hasScope(SCOPE.contacts)) jobs.push(peopleSearch('/people:searchContacts', q, 'names,emailAddresses', [SCOPE.contacts]));
+    if (hasScope(SCOPE.otherContacts)) jobs.push(peopleSearch('/otherContacts:search', q, 'names,emailAddresses', [SCOPE.otherContacts]));
+    if (!jobs.length) throw new ScopeError('연락처 권한이 없습니다', FEATURES.contacts.scopes);
+    for (const r of await Promise.all(jobs)) out.push(...peopleFromGoogle(r));
+    return dedupeContacts(out);
+  },
+  /** 이 기기 파일을 구글 드라이브(내 드라이브)에 올리고 첨부 모양으로 돌려준다(5MB까지, 한 번에 올리기) */
+  async uploadAttachment(file) {
+    const boundary = `jbcal${Date.now().toString(36)}`;
+    const meta = { name: file.name, mimeType: file.type || 'application/octet-stream', description: "JB's 캘린더에서 첨부" };
+    const raw = new Blob([
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`,
+      `--${boundary}\r\nContent-Type: ${meta.mimeType}\r\n\r\n`, file, `\r\n--${boundary}--`,
+    ]);
+    const r = await call('/files', {
+      base: UPLOAD_API, method: 'POST', raw, need: [SCOPE.drive], label: '구글 드라이브',
+      headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+      query: { uploadType: 'multipart', fields: 'id,name,mimeType,webViewLink,iconLink' },
+    });
+    return { fileUrl: r.webViewLink || `https://drive.google.com/open?id=${r.id}`, title: r.name, mimeType: r.mimeType, fileId: r.id, ...(r.iconLink ? { iconLink: r.iconLink } : {}) };
+  },
+  /** 구글 쪽 캘린더 색(모든 기기) */
+  async setCalendarColor(id, hex) {
+    await call(`/users/me/calendarList/${enc(id)}`, {
+      method: 'PATCH', need: [SCOPE.calList], query: { colorRgbFormat: 'true' },
+      body: { backgroundColor: hex, foregroundColor: readableOn(hex) },
+    });
+  },
+  /** 캘린더 구독(공휴일·공개 캘린더 ID·다른 사람 이메일) */
+  async subscribeCalendar(id) {
+    return calFromGoogle(await call('/users/me/calendarList', { method: 'POST', need: [SCOPE.calList], body: { id } }));
+  },
+  /** 구독 해제(내 목록에서만 빠짐. 캘린더 자체는 그대로) */
+  async unsubscribeCalendar(id) {
+    await call(`/users/me/calendarList/${enc(id)}`, { method: 'DELETE', need: [SCOPE.calList] });
+  },
+  /** 새 캘린더 만들기(색은 목록 권한이 있으면 같이) */
+  async createCalendar(name, hex) {
+    const c = await call('/calendars', { method: 'POST', need: [SCOPE.calCreate], body: { summary: name, timeZone: TZ } });
+    if (hex && hasScope(SCOPE.calList)) { try { await this.setCalendarColor(c.id, hex); } catch { /* 색은 나중에 */ } }
+    return { id: c.id, name: c.summary, color: hex || '#4f5bd5', primary: false, readOnly: false, visible: true, owner: true, defaultReminders: [] };
+  },
 };
+
+let peopleWarm = false;
+function peopleSearch(path, query, readMask, need) {
+  return call(path, { base: PEOPLE_API, need, label: '구글 연락처', query: { query, readMask, pageSize: 10 } });
+}
+/** People API 검색 결과 → [{name, email}] */
+export function peopleFromGoogle(r) {
+  const out = [];
+  for (const x of r?.results || []) {
+    const p = x.person || {};
+    const name = p.names?.[0]?.displayName || '';
+    for (const em of p.emailAddresses || []) if (em.value) out.push({ name, email: em.value });
+  }
+  return out;
+}
+export function dedupeContacts(list) {
+  const seen = new Set();
+  return list.filter((c) => { const k = c.email.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+/** freeBusy 응답 → {id: {busy:[{start,end}]} | {error}} (시각은 ms) */
+export function freeBusyFromGoogle(r) {
+  const out = {};
+  for (const [id, v] of Object.entries(r?.calendars || {})) {
+    out[id] = v.errors?.length ? { error: v.errors[0].reason || 'error' }
+      : { busy: (v.busy || []).map((b) => ({ start: Date.parse(b.start), end: Date.parse(b.end) })) };
+  }
+  return out;
+}
+/** 배경색에 맞는 글자색(흰색/검정) */
+export function readableOn(hex) {
+  const n = parseInt(String(hex).replace('#', ''), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  return (r * 299 + g * 587 + b * 114) / 1000 > 160 ? '#000000' : '#ffffff';
+}
 /** 쓰기 요청 덧붙임: 참석자에게 메일(사용자가 고른 때만), 구글 Meet 만들기 */
 function writeQuery(e) {
-  return { sendUpdates: e.notify ? 'all' : 'none', ...(e.addMeet || e.meet ? { conferenceDataVersion: 1 } : {}) };
+  // supportsAttachments: 첨부를 아는 앱이라고 알린다(보내지 않은 첨부는 구글 쪽 그대로)
+  return { sendUpdates: e.notify ? 'all' : 'none', supportsAttachments: 'true', ...(e.addMeet || e.meet ? { conferenceDataVersion: 1 } : {}) };
 }
 
 /* ---------- 할 일 (Google Tasks) ---------- */
@@ -366,7 +510,7 @@ export function taskToGoogle(t, { create = false } = {}) {
   return body;
 }
 
-const tcall = (path, opts = {}) => call(path, { ...opts, base: TASKS_API, label: '구글 할 일' });
+const tcall = (path, opts = {}) => call(path, { ...opts, base: TASKS_API, label: '구글 할 일', need: [TASKS_SCOPE] });
 
 export const googleTasks = {
   kind: 'google',

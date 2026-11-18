@@ -4,6 +4,8 @@ import { P, T, DAY, startOfDay } from './time.js';
 import { ruleOf, expand, truncateBefore, untilStr } from './recur.js';
 
 const K = 'nanal.demo.v1';
+const KC = 'nanal.demo.cals.v1'; // 데모: 구독·새로 만든 캘린더, 구글 쪽 색(가짜)
+export const DEMO_SELF = 'jb@example.com';
 
 const CALS = [
   { id: 'personal', name: '개인', color: '#3b82f6', primary: true, readOnly: false, visible: true },
@@ -50,6 +52,13 @@ function seed(now) {
   allDay(-2, 1, 'work', '월간 보고 마감');
   at(12, 10, 0, 60, 'work', '분기 전략 회의');
   at(15, 19, 0, 120, 'family', '결혼기념일 저녁', '한남동');
+  // 남이 초대한 일정(내 응답·가용 시간 시험용)
+  at(9, 10, 0, 60, 'work', '협력사 미팅', '시청 별관', 'Zoom: https://zoom.us/j/123456789?pwd=demo');
+  evs[evs.length - 1].attendees = [
+    { email: 'partner@example.com', name: '박 대표', status: 'accepted', organizer: true },
+    { email: DEMO_SELF, name: 'JB', status: 'needsAction', self: true },
+    { email: 'minsu.kim@example.com', name: '김민수', status: 'tentative' },
+  ];
   // 반복 일정(구글처럼 원본 하나 + RRULE): 오늘 뒤 첫 목요일부터 매주 목요일 오후 4시
   const thu = today + (((4 - P(today).dow + 7) % 7) || 7) * DAY;
   evs.push({ id: 'r1', calendarId: 'work', title: '주간 업무 회의', location: '소회의실', note: '', allDay: false,
@@ -84,7 +93,20 @@ function save(events) {
 export function resetDemo() {
   localStorage.removeItem(K);
   localStorage.removeItem(KT);
+  localStorage.removeItem(KC);
 }
+const loadCals = () => { try { return { extra: [], colors: {}, removed: [], ...JSON.parse(localStorage.getItem(KC) || '{}') }; } catch { return { extra: [], colors: {}, removed: [] }; } };
+const saveCals = (c) => localStorage.setItem(KC, JSON.stringify(c));
+// 데모 구독 목록(구글에서 쓰는 공개 캘린더 ID와 같은 모양)
+const DEMO_PUBLIC = { 'ja.japanese#holiday@group.v.calendar.google.com': '일본 공휴일', 'en.usa#holiday@group.v.calendar.google.com': '미국 공휴일',
+  'ht3jlfaac5lfd6263ulfh4tql8@group.calendar.google.com': '달의 위상' };
+const DEMO_CONTACTS = [
+  { name: '김민수', email: 'minsu.kim@example.com' }, { name: '김민지', email: 'minji@example.org' },
+  { name: '박 대표', email: 'partner@example.com' }, { name: '이영희', email: 'younghee.lee@example.com' },
+  { name: '최 과장', email: 'choi@example.go.kr' },
+];
+// 데모 가용 시간: 남의 바쁜 시간은 이메일로 정해지는 가짜 값
+const hashOf = (s) => [...s].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
 
 // 반복 원본(recurrence 있음)은 읽을 때 회차로 펼친다. 회차 id = 원본id_시작(UTC), 회차를 고치면 따로 저장(예외),
 // 「이 일정만」 지우면 원본 exdates 에 그 회차 시작을 넣는다(구글과 같은 모양).
@@ -102,7 +124,9 @@ function expandMaster(m, all, from, to) {
 export const demoStore = {
   kind: 'demo',
   async calendars() {
-    return CALS.map((c) => ({ ...c }));
+    const x = loadCals();
+    return [...CALS, ...x.extra].filter((c) => !x.removed.includes(c.id))
+      .map((c) => ({ defaultReminders: [10], owner: !c.readOnly, ...c, ...(x.colors[c.id] ? { color: x.colors[c.id] } : {}) }));
   },
   async events(cals, from, to) {
     const ids = new Set(cals.map((c) => c.id));
@@ -167,6 +191,57 @@ export const demoStore = {
   },
   async restoreInstance(e) {
     save(load().map((x) => (x.id === e.recurringEventId ? { ...x, exdates: (x.exdates || []).filter((t) => t !== e.originalStart) } : x)));
+  },
+  async respond(e, status) {
+    const evs = load();
+    const set = (x) => ({ ...x, attendees: (x.attendees || []).map((a) => (a.self ? { ...a, status } : a)) });
+    if (evs.some((x) => x.id === e.id)) save(evs.map((x) => (x.id === e.id ? set(x) : x)));
+  },
+  async freeBusy(ids, from, to) {
+    const out = {};
+    const mine = (await this.events(CALS.filter((c) => !c.readOnly), from, to)).filter((e) => !e.free && !e.allDay);
+    for (const id of ids) {
+      if (id === 'primary' || id === DEMO_SELF) { out[id] = { busy: mine.map((e) => ({ start: e.start, end: e.end })) }; continue; }
+      if (/nobody|private/.test(id)) { out[id] = { error: 'notFound' }; continue; }
+      const h = hashOf(id);
+      const busy = [];
+      for (let d = startOfDay(from); d < to; d += DAY) {
+        busy.push({ start: d + (10 + (h % 3)) * 3600e3, end: d + (11 + (h % 3)) * 3600e3 });
+        busy.push({ start: d + (14 + (h % 4)) * 3600e3, end: d + (15.5 + (h % 4)) * 3600e3 });
+      }
+      out[id] = { busy };
+    }
+    return out;
+  },
+  async searchContacts(q) {
+    const k = q.trim().toLowerCase();
+    return DEMO_CONTACTS.filter((c) => c.name.toLowerCase().includes(k) || c.email.includes(k)).map((c) => ({ ...c }));
+  },
+  async uploadAttachment(file) {
+    const id = `demo-${Date.now().toString(36)}`;
+    return { fileUrl: `https://drive.google.com/file/d/${id}/view`, title: file.name, mimeType: file.type || 'application/octet-stream', fileId: id };
+  },
+  async setCalendarColor(id, hex) { const x = loadCals(); x.colors[id] = hex; saveCals(x); },
+  async subscribeCalendar(id) {
+    const x = loadCals();
+    const c = { id, name: DEMO_PUBLIC[id] || id, color: '#0b8043', primary: false, readOnly: true, visible: true };
+    x.removed = x.removed.filter((r) => r !== id);
+    if (!CALS.some((k) => k.id === id) && !x.extra.some((k) => k.id === id)) x.extra.push(c);
+    saveCals(x);
+    return c;
+  },
+  async unsubscribeCalendar(id) {
+    const x = loadCals();
+    x.extra = x.extra.filter((k) => k.id !== id);
+    if (CALS.some((k) => k.id === id)) x.removed.push(id);
+    saveCals(x);
+  },
+  async createCalendar(name, hex) {
+    const x = loadCals();
+    const c = { id: `cal-${Date.now().toString(36)}`, name, color: hex || '#4f5bd5', primary: false, readOnly: false, visible: true };
+    x.extra.push(c);
+    saveCals(x);
+    return { ...c, owner: true, defaultReminders: [] };
   },
 };
 

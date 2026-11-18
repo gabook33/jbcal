@@ -7,8 +7,10 @@ import { parseQuick } from './nlp.js';
 import { demoStore, demoTasks, resetDemo } from './demo.js';
 import {
   googleStore, getToken, wasLinked, beginLogin, consumeRedirect, logout, AuthError, EVENT_COLORS,
-  googleTasks, hasTasksScope, ScopeError, ApiDisabledError,
+  googleTasks, hasTasksScope, ScopeError, ApiDisabledError, FEATURES, hasFeature,
 } from './gcal.js';
+import { confOf, CONF_NEW, freeSlots, dueAlerts, nextAlertAt, alertBody, mapLinks, travelText } from './extras.js';
+import { geocode, route, here } from './travel.js';
 import { tasksForDay, groupTasks } from './tasks.js';
 import { ruleOf, buildRRule, describeRule, presetRule, presetOf, REPEAT_OPTIONS } from './recur.js';
 
@@ -34,6 +36,12 @@ const K_DEFCAL = 'nanal.defCal'; // 새 일정 기본 캘린더
 const K_DUR = 'nanal.defDur'; // 새 일정 기본 길이(분)
 const K_WKNUM = 'nanal.weekNum'; // 월 보기 주 번호
 const K_TPL = 'nanal.templates'; // 일정 템플릿
+const K_RESUME = 'nanal.featResume'; // (sessionStorage) 기능 권한 동의 화면에서 돌아오면 이어서 할 일
+const K_NOTIF = 'nanal.notif'; // 이 기기 알림 켬 '1'
+const K_NMUTE = 'nanal.notifMuted'; // 이 기기 알림을 끈 캘린더 id 목록
+const K_FIRED = 'nanal.notifFired'; // 이미 보낸 알림 {열쇠: 보낸 시각}
+const K_TRAVEL = 'nanal.travel'; // 일정별 이동 시간 {일정 id: {min, km, place, dest, from, alert}}
+const K_ORIGIN = 'nanal.origin'; // 이동 시간 출발지(비우면 현재 위치)
 const jget = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const TASKS_KEY = '__tasks'; // 캘린더 켜기·끄기 목록에서 「할 일」 줄(S.hidden 에 같이 저장)
 
@@ -258,6 +266,8 @@ async function render({ refetch = false } = {}) {
   syncAsk();
   if (document.body.classList.contains('search-open')) runSearch();
   S.jump = false;
+  // 일정이 바뀌었을 수 있으니 이 기기 알림을 곧 다시 맞춘다
+  if (notifOn()) { clearTimeout(notifTimer); notifTimer = setTimeout(checkAlerts, 800); }
 }
 
 function renderChrome() {
@@ -591,7 +601,9 @@ function mEventsHTML(evs, d, now, tasks = []) {
 }
 /** 제목 뒤 작은 표시: 반복(↻), 참석자(👥), 화상회의 「참가」 */
 function badges(e) {
-  return `${e.recurring ? '<span class="bdg" title="반복 일정" aria-label="반복">↻</span>' : ''}${e.attendees?.length ? `<span class="bdg" title="참석자 ${e.attendees.length}명" aria-label="참석자">👥</span>` : ''}${e.meet ? `<span class="bdg join" role="link" data-join="${esc(e.meet)}" aria-label="화상회의 참가">참가</span>` : ''}`;
+  const cf = confOf(e);
+  const tv = travelOf(e);
+  return `${e.recurring ? '<span class="bdg" title="반복 일정" aria-label="반복">↻</span>' : ''}${e.attendees?.length ? `<span class="bdg" title="참석자 ${e.attendees.length}명" aria-label="참석자">👥</span>` : ''}${e.attachments?.length ? `<span class="bdg" title="첨부 ${e.attachments.length}개" aria-label="첨부">📎</span>` : ''}${tv ? `<span class="bdg" title="${esc(travelText(tv))}" aria-label="이동 시간">🚗${tv.min}분</span>` : ''}${cf ? `<span class="bdg join k-${esc(cf.kind)}" role="link" data-join="${esc(cf.url)}" aria-label="${esc(cf.kind)} 참가">${cf.kind === 'Meet' || cf.kind === '화상회의' ? '참가' : `${esc(cf.kind)} 참가`}</span>` : ''}`;
 }
 const mDayLabel = (d, today) => {
   const p = P(d);
@@ -1423,10 +1435,20 @@ function openEditor(e, isNew = false) {
   const link = $('#edLink');
   link.hidden = !e.link;
   if (e.link) link.href = e.link;
-  $('#edMeet').hidden = !e.meet;
-  if (e.meet) $('#edMeet').href = e.meet;
   $('#edMeetRow').hidden = !!e.meet || ro;
+  $('#edConfRow').hidden = ro;
+  $('#edConfHint').hidden = ro;
+  // 첨부·이동 시간·가용 시간·내 응답
+  editing.files = (e.attachments || []).map((a) => ({ ...a }));
+  editing.filesTouched = false;
+  editing.travel = e.id ? travelOf(e, true) : null;
+  $('.file-btns').hidden = ro;
+  $('#edFb').hidden = true;
+  $('#edFb').innerHTML = '';
+  hideSug();
+  renderFiles();
   syncUrlLink();
+  renderTravel();
   renderAttendees();
   syncEditor();
   dlg.showModal();
@@ -1583,19 +1605,41 @@ function renderAttendees() {
     return `<span class="att att-${esc(a.status || 'needsAction')}" title="${esc(a.email)} · ${label}${a.organizer ? ' · 주최자' : ''}"><b>${ic}</b>${esc(a.name || a.email)}${a.organizer ? ' <small>주최</small>' : ''}${ro || a.organizer ? '' : `<button type="button" class="att-del" data-att="${i}" aria-label="${esc(a.email)} 빼기">×</button>`}</span>`;
   }).join('');
   $('#edNotifyRow').hidden = ro || !(editing.attendees.some((a) => !a.self) && (editing.attTouched || editing.isNew));
+  // 내 응답: 남이 주최한 일정에 내가 초대됐을 때
+  const me = editing.attendees.find((a) => a.self);
+  const rs = $('#edRsvp');
+  rs.hidden = !me || !!me.organizer || editing.isNew;
+  rs.querySelectorAll('[data-rsvp]').forEach((b) => b.classList.toggle('on', b.dataset.rsvp === me?.status));
+  $('#edFbBtn').hidden = ro;
 }
-function addAttendee() {
+function addAttendee(loud = true) {
   const v = form.attIn.value.trim();
   if (!v) return;
   const list = v.split(/[\s,;]+/).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
-  if (!list.length) { toast('이메일 주소를 확인해 주세요'); return; }
+  // 이름만 적었으면 연락처 찾기 목록에서 고르게 둔다(Enter 는 첫 후보)
+  if (!list.length) { if (loud && !/@/.test(v)) suggest(v, true); else if (loud) toast('이메일 주소를 확인해 주세요'); return; }
   for (const email of list) if (!editing.attendees.some((a) => a.email.toLowerCase() === email.toLowerCase())) editing.attendees.push({ email, status: 'needsAction' });
   editing.attTouched = true;
   form.attIn.value = '';
   renderAttendees();
 }
-form.attIn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); addAttendee(); } });
-form.attIn.addEventListener('change', addAttendee);
+form.attIn.addEventListener('keydown', (ev) => {
+  const box = $('#edAttSug');
+  const items = box.hidden ? [] : [...box.querySelectorAll('button')];
+  if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && items.length) {
+    ev.preventDefault();
+    sugIdx = (sugIdx + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items.forEach((b, i) => b.classList.toggle('on', i === sugIdx));
+    return;
+  }
+  if (ev.key === 'Escape' && items.length) { ev.preventDefault(); ev.stopPropagation(); hideSug(); return; }
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    if (items.length && (sugIdx >= 0 || !/@/.test(form.attIn.value))) { (items[Math.max(0, sugIdx)]).click(); return; }
+    addAttendee();
+  }
+});
+form.attIn.addEventListener('change', () => addAttendee(false));
 $('#edAtt').addEventListener('click', (ev) => {
   const b = ev.target.closest('[data-att]');
   if (!b) return;
@@ -1606,15 +1650,26 @@ $('#edAtt').addEventListener('click', (ev) => {
 function syncUrlLink() {
   const u = form.url.value.trim();
   const ok = /^https?:\/\//i.test(u);
-  $('#edUrl').hidden = !ok;
+  // 화상회의(Meet·Zoom·Teams·Webex): URL·장소·메모에서 찾아 「참가」 링크
+  const cf = editing && confOf({ meet: editing.event.meet, url: u, location: form.location.value, note: form.note.value });
+  $('#edMeet').hidden = !cf;
+  if (cf) { $('#edMeet').href = cf.url; $('#edMeet').textContent = `${cf.kind === '화상회의' ? '화상회의' : cf.kind} 참가 ↗`; }
+  $('#edUrl').hidden = !ok || cf?.url === u;
   if (ok) $('#edUrl').href = u;
-  // 장소가 있으면 지도(네이버 지도 검색)로
+  $('#edTvRow').hidden = !form.location.value.trim() || !!editing?.event.readOnly && !editing?.travel;
+  // 장소가 있으면 지도 링크(아래 「길찾기」 줄: 카카오맵·네이버 지도·구글 지도)
   const loc = form.location.value.trim();
-  $('#edMap').hidden = !loc;
+  $('#edMap').hidden = true;
   if (loc) $('#edMap').href = `https://map.naver.com/p/search/${encodeURIComponent(loc)}`;
+  if (editing) renderTvLinks();
 }
 form.url.addEventListener('input', syncUrlLink);
-form.location.addEventListener('input', syncUrlLink);
+form.location.addEventListener('input', () => {
+  syncUrlLink();
+  // 장소를 바꾸면 계산해 둔 이동 시간은 버린다
+  if (editing?.travel && editing.travel.place !== form.location.value.trim()) { editing.travel = null; renderTravel(); }
+});
+form.note.addEventListener('input', syncUrlLink);
 
 /** 알림 고르기: 목록에 없는 값(20분 전 등)은 그 일정에만 보기 하나를 더 붙인다. 여러 개면 칸을 늘린다 */
 function setReminderField(v = 'default') {
@@ -1739,6 +1794,7 @@ form.addEventListener('submit', async (ev) => {
   // 참석자: 제목에 적은 이메일도 더한다. 바꿨을 때만 구글에 보낸다
   if (parsed?.attendees?.length) for (const email of parsed.attendees) if (!ed.attendees.some((a) => a.email === email)) { ed.attendees.push({ email, status: 'needsAction' }); ed.attTouched = true; }
   if (ed.attTouched) { e.attendees = ed.attendees; e.attendeesChanged = true; e.notify = form.notify.checked; }
+  if (ed.filesTouched) { e.attachments = ed.files; e.attachmentsChanged = true; }
   // 반복
   const rule = ed.ruleLoaded ? readRule(start) : null;
   const keepUnknown = form.repeat.value === 'custom' && ed.customRule?.unknown && !ed.repTouched;
@@ -1767,6 +1823,7 @@ form.addEventListener('submit', async (ev) => {
       saved = await guarded(() => updateEvent(e, orig.calendarId));
     }
     if (!saved) return;
+    saveTravel(saved.id, ed.travel && ed.travel.place === saved.location ? ed.travel : null);
     dlg.close();
     if (refetch) searchPool = null;
     await render({ refetch });
@@ -1841,7 +1898,7 @@ function copyOf(e, patch = {}) {
   // 반복 회차 표시·화상회의 링크·참석자(복제해도 초대가 나가지 않게)는 빼고 만든다
   const { id, link, recurring, readOnly, recurringEventId, originalStart, recurrence, exdates, meet, attendees, ...rest } = e;
   void id; void link; void recurring; void readOnly; void recurringEventId; void originalStart; void recurrence; void exdates; void meet; void attendees;
-  return { ...rest, ...patch };
+  return { ...rest, ...(rest.attachments?.length ? { attachmentsChanged: true } : {}), ...patch };
 }
 $('#edDelete').addEventListener('click', async () => {
   if (await deleteEvent(editing.event)) dlg.close();
@@ -2396,6 +2453,8 @@ function eventMenu(e) {
     { label: '삭제', disabled: ro, hint: roHint, act: () => deleteEvent(e) },
     { label: '숨기기', hint: '이 기기 화면에서만 감춥니다(구글에는 그대로)', act: () => hideEvent(e) },
     { sep: true },
+    ...(e.location ? [{ label: '길찾기', sub: mapLinks(e.location, travelOf(e)?.dest).map((l) => ({ label: l.name, act: () => window.open(l.href, '_blank', 'noopener') })) }] : []),
+    ...(confOf(e) ? [{ label: `${confOf(e).kind} 참가`, act: () => window.open(confOf(e).url, '_blank', 'noopener') }] : []),
     { label: '이메일로 보내기', act: () => { location.href = `mailto:?subject=${encodeURIComponent(e.title)}&body=${encodeURIComponent(eventText(e))}`; } },
   ];
 }
@@ -2778,7 +2837,8 @@ async function eventActions(e) {
     { label: '복제', value: 'dup' },
     ...(ro ? [] : [{ label: '다른 날로 옮기기…', value: 'move' }]),
     { label: '템플릿으로 저장', value: 'tpl' },
-    ...(e.meet ? [{ label: '화상회의 참가', value: 'join' }] : []),
+    ...(confOf(e) ? [{ label: `${confOf(e).kind === 'Meet' ? '화상회의' : confOf(e).kind} 참가`, value: 'join' }] : []),
+    ...(e.location ? [{ label: '길찾기…', value: 'route' }] : []),
     { label: navigator.share ? '공유…' : '글자로 복사', value: 'share' },
     { label: '숨기기(이 기기만)', value: 'hide' },
     ...(ro ? [] : [{ label: '삭제', value: 'delete', danger: true }]),
@@ -2788,7 +2848,8 @@ async function eventActions(e) {
   else if (v === 'dup') duplicateEvent(e);
   else if (v === 'move') moveEventAsk(e);
   else if (v === 'tpl') saveTemplate(e);
-  else if (v === 'join') window.open(e.meet, '_blank', 'noopener');
+  else if (v === 'join') window.open(confOf(e).url, '_blank', 'noopener');
+  else if (v === 'route') openRoute(e);
   else if (v === 'share') shareEvent(e);
   else if (v === 'hide') hideEvent(e);
   else if (v === 'delete') deleteEvent(e);
@@ -3090,9 +3151,11 @@ const PALETTE = [['토마토', '#d50000'], ['플라밍고', '#e67c73'], ['귤', 
 async function pickCalColor(id) {
   const c = calById(id);
   if (!c) return;
-  const v = await ask({ title: `‘${c.name}’ 색`, msg: '이 기기에서만 바뀝니다(구글 캘린더 색은 그대로).',
+  const v = await ask({ title: `‘${c.name}’ 색`, msg: '아래를 켜지 않으면 이 기기에서만 바뀝니다.',
+    check: '구글 캘린더 색도 바꾸기(모든 기기)',
     items: [{ label: '원래 색', value: 'reset', dot: c.origColor }, ...PALETTE.map(([l, hex]) => ({ label: l, value: hex, dot: hex }))] });
   if (!v) return;
+  if (askChecked() && v !== 'reset') { await setGoogleCalColor(id, v); return; }
   if (v === 'reset') delete S.calColors[id]; else S.calColors[id] = v;
   localStorage.setItem(K_CALCOL, JSON.stringify(S.calColors));
   paintCals();
@@ -3130,6 +3193,528 @@ $('#setDel').addEventListener('click', async () => {
   renderCals();
 });
 
+/* ---------- 2026-11-19: 구글 추가 권한(처음 쓸 때만 동의) ---------- */
+
+const sget = (k) => { try { return JSON.parse(sessionStorage.getItem(k)); } catch { return null; } };
+/** 기능 권한이 있으면 true. 없으면 안내 → 동의 화면으로(돌아오면 resume 대로 이어서). 데모는 늘 true */
+const featureReady = (f) => !useGoogle || hasFeature(f, f === 'contacts');
+async function needFeature(f, resume = {}) {
+  if (featureReady(f)) return true;
+  const F = FEATURES[f];
+  const v = await ask({
+    title: `${F.name}: 구글 권한 추가`,
+    msg: `이 기능을 처음 쓸 때 한 번만 구글 동의 화면에서 허용하면 됩니다.\n허용 범위: ${F.what}\n지금 쓰는 일정·할 일 기능은 그대로입니다.${resume.draft ? '\n작성 중인 일정은 돌아온 뒤 다시 열립니다.' : ''}`,
+    items: [{ label: '허용하러 가기', value: 'ok' }],
+  });
+  if (v !== 'ok') return false;
+  sessionStorage.setItem(K_RESUME, JSON.stringify({ f, at: Date.now(), ...resume }));
+  beginLogin(CONFIG.clientId, { scopes: F.scopes });
+  return false;
+}
+/** 기능 호출 도우미: 권한이 빠졌으면 다시 동의, API 가 꺼졌으면 안내. 실패하면 null */
+async function guardedFeature(f, fn, resume = {}) {
+  try {
+    const r = await fn();
+    return r === undefined ? true : r;
+  } catch (err) {
+    console.warn(FEATURES[f].name, err.message);
+    if (err instanceof ScopeError) { needFeature(f, resume); }
+    else if (err instanceof ApiDisabledError) toast(`구글 클라우드 프로젝트에서 ${{ attach: 'Google Drive API', contacts: 'People API' }[f] || 'Google Calendar API'}가 꺼져 있습니다`);
+    else if (err instanceof AuthError) { handleError(err); toast('로그인이 필요합니다'); }
+    else toast(err.message || `${FEATURES[f].name}: 실패했습니다`);
+    return null;
+  }
+}
+/** 편집 창 내용을 그대로 담은 사본(동의 화면에 다녀온 뒤 다시 연다) */
+function editorDraft() {
+  if (!editing || !dlg.open) return null;
+  const { allDay, start, end } = readWhen();
+  return {
+    ev: { ...editing.event, title: form.title.value, calendarId: form.calendarId.value, allDay, start, end,
+      location: form.location.value, url: form.url.value, note: form.note.value, attendees: editing.attendees, attachments: editing.files },
+    isNew: editing.isNew, attTouched: editing.attTouched, filesTouched: editing.filesTouched,
+  };
+}
+function reopenDraft(d) {
+  if (!d) return;
+  const cur = d.ev.id && S.events.find((x) => x.id === d.ev.id);
+  openEditor(cur ? { ...cur, ...d.ev, readOnly: cur.readOnly } : d.ev, d.isNew);
+  form.title.value = d.ev.title;
+  editing.attTouched = d.attTouched;
+  editing.filesTouched = d.filesTouched;
+  renderAttendees();
+}
+async function resumeFeature(r) {
+  const F = FEATURES[r.f];
+  if (!F) return;
+  const ok = !!getToken() && hasFeature(r.f, r.f === 'contacts');
+  toast(ok ? `‘${F.name}’ 권한을 허용했습니다` : `‘${F.name}’ 권한을 허용하지 않았습니다. 다른 기능은 그대로 쓸 수 있습니다`);
+  reopenDraft(r.draft);
+  if (!ok) return;
+  if (r.then === 'freebusy' && dlg.open) runFreeBusy();
+  else if (r.then === 'contacts' && dlg.open) { form.attIn.value = r.q || ''; form.attIn.focus(); if (r.q) suggest(r.q, true); }
+  else if (r.then === 'attach' && dlg.open) toast('「파일 올리기」를 한 번 더 눌러 주세요');
+  else if (r.then === 'calColor') setGoogleCalColor(r.id, r.hex);
+  else if (r.then === 'calManage') calManage(r.step);
+}
+/** 설정: 구글 추가 권한 현황·허용 */
+async function featureList() {
+  const keys = Object.keys(FEATURES);
+  const st = (f) => (featureReady(f) ? '허용됨' : '아직');
+  const v = await ask({
+    title: '구글 추가 권한',
+    msg: `${keys.map((f) => `· ${FEATURES[f].name}: ${useGoogle ? st(f) : '데모(권한 없이 시험)'}`).join('\n')}\n\n각 기능을 처음 쓸 때 자동으로 묻습니다. 미리 허용하려면 아래에서 고르세요.`,
+    items: useGoogle ? keys.filter((f) => !featureReady(f)).map((f) => ({ label: `허용: ${FEATURES[f].name}`, value: f })) : [],
+    cancel: '닫기',
+  });
+  if (v) needFeature(v);
+}
+
+/* ---------- 첨부(구글 드라이브) ---------- */
+
+function renderFiles() {
+  const ro = !!editing.event.readOnly;
+  $('#edFiles').innerHTML = editing.files.map((a, i) => `<span class="file"><a href="${esc(a.fileUrl)}" target="_blank" rel="noopener" title="${esc(a.title)}">${esc(a.title)}</a>${ro ? '' : `<button type="button" class="att-del" data-file="${i}" aria-label="${esc(a.title)} 빼기">×</button>`}</span>`).join('');
+}
+$('#edFiles').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-file]');
+  if (!b) return;
+  editing.files.splice(+b.dataset.file, 1);
+  editing.filesTouched = true;
+  renderFiles();
+});
+$('#edFileUp').addEventListener('click', async () => {
+  // 권한이 있으면 바로 파일 고르기(사용자 동작 안에서 열어야 휴대폰에서도 뜬다)
+  if (featureReady('attach')) { $('#edFileIn').click(); return; }
+  await needFeature('attach', { draft: editorDraft(), then: 'attach' });
+});
+$('#edFileIn').addEventListener('change', async (ev) => {
+  const file = ev.target.files?.[0];
+  ev.target.value = '';
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { toast('5MB 넘는 파일은 드라이브에 먼저 올린 뒤 「드라이브 링크 붙이기」로 넣어 주세요'); return; }
+  const ed = editing;
+  toast(`‘${file.name}’ 올리는 중…`);
+  const a = await guardedFeature('attach', () => S.store.uploadAttachment(file), { draft: editorDraft(), then: 'attach' });
+  if (!a || editing !== ed) return;
+  ed.files.push(a);
+  ed.filesTouched = true;
+  renderFiles();
+  toast('구글 드라이브에 올렸습니다 · 저장하면 일정에 붙습니다');
+});
+$('#edFileLink').addEventListener('click', async () => {
+  const v = await ask({
+    title: '드라이브 링크 붙이기',
+    msg: '구글 드라이브·문서 공유 링크를 붙여 넣으세요(추가 권한 필요 없음).',
+    input: '<input type="url" name="flUrl" placeholder="https://drive.google.com/…" aria-label="드라이브 링크"><input type="text" name="flTitle" placeholder="이름(비우면 자동)" aria-label="첨부 이름">',
+    items: [{ label: '붙이기', value: 'ok' }],
+  });
+  const url = askDlg.querySelector('[name=flUrl]')?.value.trim() || '';
+  const title = askDlg.querySelector('[name=flTitle]')?.value.trim() || '';
+  if (v !== 'ok' || !url) return;
+  if (!/^https:\/\/(drive|docs)\.google\.com\//.test(url)) { toast('구글 드라이브(drive.google.com·docs.google.com) 링크만 첨부할 수 있습니다. 다른 주소는 URL 칸에 넣어 주세요'); return; }
+  editing.files.push({ fileUrl: url, title: title || (/docs\.google\.com\/(\w+)/.exec(url)?.[1] === 'spreadsheets' ? '구글 시트' : /docs\.google\.com\/document/.test(url) ? '구글 문서' : /presentation/.test(url) ? '구글 슬라이드' : '드라이브 파일') });
+  editing.filesTouched = true;
+  renderFiles();
+});
+
+/* ---------- 참석자: 연락처 이름으로 찾기 ---------- */
+
+let sugTimer = 0;
+let sugIdx = -1;
+let sugList = [];
+function hideSug() { const b = $('#edAttSug'); b.hidden = true; b.innerHTML = ''; sugIdx = -1; sugList = []; }
+function showSug(list, needQ = '') {
+  const b = $('#edAttSug');
+  sugList = list;
+  sugIdx = -1;
+  b.innerHTML = needQ
+    ? `<button type="button" class="sug-need" data-sugneed="${esc(needQ)}">연락처에서 ‘${esc(needQ)}’ 찾기 <small>구글 연락처 권한 허용</small></button>`
+    : list.map((c, i) => `<button type="button" data-sug="${i}" role="option"><span>${esc(c.name || c.email)}</span><small>${esc(c.email)}</small></button>`).join('');
+  b.hidden = !b.innerHTML;
+}
+async function suggest(q, now = false) {
+  clearTimeout(sugTimer);
+  if (!now) { sugTimer = setTimeout(() => suggest(q, true), 250); return; }
+  q = q.trim();
+  if (!q || /[,;]/.test(q)) { hideSug(); return; }
+  if (!featureReady('contacts')) { if (/@/.test(q)) hideSug(); else showSug([], q); return; }
+  try {
+    const list = (await S.store.searchContacts(q)).filter((c) => !editing.attendees.some((a) => a.email.toLowerCase() === c.email.toLowerCase()));
+    if (form.attIn.value.trim() !== q) return;
+    if (list.length) showSug(list.slice(0, 8));
+    else if (/@/.test(q)) hideSug();
+    else { showSug([]); $('#edAttSug').innerHTML = `<button type="button" disabled><small>‘${esc(q)}’ 연락처 없음 · 이메일로 적어 주세요</small></button>`; $('#edAttSug').hidden = false; }
+  } catch (err) {
+    if (err instanceof ScopeError) showSug([], q);
+    else { hideSug(); if (err instanceof ApiDisabledError) toast('구글 클라우드 프로젝트에서 People API가 꺼져 있습니다'); }
+  }
+}
+form.attIn.addEventListener('input', () => suggest(form.attIn.value));
+// 목록을 누를 때 입력 칸이 포커스를 잃지 않게
+$('#edAttSug').addEventListener('pointerdown', (ev) => ev.preventDefault());
+$('#edAttSug').addEventListener('click', async (ev) => {
+  const need = ev.target.closest('[data-sugneed]');
+  if (need) { hideSug(); await needFeature('contacts', { draft: editorDraft(), then: 'contacts', q: need.dataset.sugneed }); return; }
+  const b = ev.target.closest('[data-sug]');
+  if (!b) return;
+  const c = sugList[+b.dataset.sug];
+  if (!editing.attendees.some((a) => a.email.toLowerCase() === c.email.toLowerCase())) editing.attendees.push({ email: c.email, name: c.name, status: 'needsAction' });
+  editing.attTouched = true;
+  form.attIn.value = '';
+  hideSug();
+  renderAttendees();
+  form.attIn.focus();
+});
+form.attIn.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== form.attIn) hideSug(); }, 150));
+
+/* ---------- 가용 시간 조회 ---------- */
+
+$('#edFbBtn').addEventListener('click', async () => {
+  if (await needFeature('freebusy', { draft: editorDraft(), then: 'freebusy' })) runFreeBusy();
+});
+const slotDay = (ts) => { const p = P(ts); return `${p.m + 1}/${p.d}(${WD[p.dow]})`; };
+async function runFreeBusy() {
+  const ed = editing;
+  const box = $('#edFb');
+  const { start, end, allDay } = readWhen();
+  const day = startOfDay(start);
+  const people = [{ id: 'primary', name: '나' }, ...ed.attendees.filter((a) => !a.self).map((a) => ({ id: a.email, name: a.name || a.email }))];
+  box.hidden = false;
+  box.textContent = '가용 시간 확인 중…';
+  // 그날부터 사흘(빈 시간 추천용)
+  const fb = await guardedFeature('freebusy', () => S.store.freeBusy(people.map((p) => p.id), day, day + 3 * DAY), { draft: editorDraft(), then: 'freebusy' });
+  if (editing !== ed) return;
+  if (!fb) { box.hidden = true; return; }
+  const H0 = 7;
+  const H1 = 21;
+  const from = day + H0 * 3600e3;
+  const span = (H1 - H0) * 3600e3;
+  const pct = (t) => `${Math.max(0, Math.min(100, ((t - from) / span) * 100)).toFixed(2)}%`;
+  // 지금 고치는 일정 자신은 내 바쁜 시간에서 뺀다
+  const own = (b) => !ed.isNew && b.start === ed.event.start && b.end === ed.event.end;
+  const busyOf = (p) => (fb[p.id]?.busy || []).filter((b) => !(p.id === 'primary' && own(b)));
+  const clash = [];
+  let html = '';
+  for (const p of people) {
+    const r = fb[p.id];
+    if (!r || r.error) { html += `<div class="fb-line"><span class="fb-name" title="${esc(p.id)}">${esc(p.name)}</span><span class="fb-bar err" title="볼 수 없음(가용 시간을 공유하지 않음)"></span></div>`; continue; }
+    const bs = busyOf(p).filter((b) => b.end > from && b.start < from + span);
+    if (!allDay && busyOf(p).some((b) => b.start < end && b.end > start)) clash.push(p.name);
+    html += `<div class="fb-line"><span class="fb-name" title="${esc(p.id)}">${esc(p.name)}</span><span class="fb-bar">${bs.map((b) => `<i style="left:${pct(b.start)};width:calc(${pct(b.end)} - ${pct(b.start)})" title="${fmtTime(b.start)}–${fmtTime(b.end)} 바쁨"></i>`).join('')}${allDay ? '' : `<b style="left:${pct(start)};width:calc(${pct(end)} - ${pct(start)})"></b>`}</span></div>`;
+  }
+  const ticks = [];
+  for (let h = H0 + 1; h < H1; h += 2) ticks.push(`<span style="left:${pct(day + h * 3600e3)}">${h}시</span>`);
+  const dur = allDay ? 3600e3 : end - start;
+  const all = people.flatMap((p) => (fb[p.id]?.busy ? busyOf(p) : []));
+  const slots = freeSlots(all, Math.max(day, Date.now()), day + 3 * DAY, dur, { dayStart: day, workFrom: 9, workTo: 18, limit: 4 });
+  const unseen = people.filter((p) => !fb[p.id] || fb[p.id].error).map((p) => p.name);
+  box.innerHTML = `<div class="fb-axis"><span>${fmtDate(day)}</span><span class="fb-ticks">${ticks.join('')}</span></div>${html}
+    <p>${allDay ? '종일 일정입니다.' : clash.length ? `⚠︎ 겹침: ${esc(clash.join(', '))}` : '✓ 이 시간에 모두 비어 있습니다.'}${unseen.length ? ` (볼 수 없음: ${esc(unseen.join(', '))})` : ''}</p>
+    ${slots.length ? `<div class="fb-sug"><span>모두 비는 시간(9–18시):</span>${slots.map((s) => `<button type="button" data-slot="${s.start}" data-dur="${dur}">${slotDay(s.start)} ${fmtTime(s.start)}–${fmtTime(s.end)}</button>`).join('')}</div>` : ''}`;
+}
+$('#edFb').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-slot]');
+  if (!b) return;
+  const s0 = +b.dataset.slot;
+  form.allDay.checked = false;
+  showWhen(s0, s0 + +b.dataset.dur, false);
+  syncEditor();
+  editing.whenTouched = true;
+  runFreeBusy();
+});
+
+/* ---------- 내 응답(수락·미정·거절) ---------- */
+
+$('#edRsvp').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-rsvp]');
+  if (!b) return;
+  const ed = editing;
+  const e = ed.event;
+  const status = b.dataset.rsvp;
+  const ok = await guarded(async () => { await S.store.respond({ ...e, attendees: ed.attendees }, status); return true; });
+  if (!ok) return;
+  ed.attendees = ed.attendees.map((a) => (a.self ? { ...a, status } : a));
+  const upd = (x) => (x.id === e.id ? { ...x, attendees: ed.attendees.map((a) => ({ ...a })) } : x);
+  S.events = S.events.map(upd);
+  if (searchPool) searchPool.evs = searchPool.evs.map(upd);
+  ed.event = upd(e);
+  renderAttendees();
+  render();
+  toast(`응답: ${{ accepted: '수락', tentative: '미정', declined: '거절' }[status]}`);
+});
+
+/* ---------- Zoom·Teams: 각 서비스에서 회의를 만들고 링크를 붙인다 ---------- */
+$('#edZoomNew').href = CONF_NEW.Zoom;
+$('#edTeamsNew').href = CONF_NEW.Teams;
+
+/* ---------- 이동 시간(키 없이: OpenStreetMap 검색 + OSRM 경로) ---------- */
+
+const travelMap = () => jget(K_TRAVEL, {});
+/** 일정의 이동 시간(장소가 그대로일 때만). any=장소 비교 없이 */
+function travelOf(e, any = false) {
+  const t = travelMap()[e.id];
+  return t && (any || t.place === (e.location || '').trim()) ? t : null;
+}
+function saveTravel(id, t) {
+  const m = travelMap();
+  if (t) m[id] = { ...t, at: Date.now() }; else delete m[id];
+  // 오래된 것(60일)은 지운다
+  for (const [k, v] of Object.entries(m)) if (Date.now() - (v.at || 0) > 60 * DAY) delete m[k];
+  localStorage.setItem(K_TRAVEL, JSON.stringify(m));
+}
+async function originPoint() {
+  const o = (localStorage.getItem(K_ORIGIN) || '').trim();
+  if (!o) return here();
+  const g = await geocode(o);
+  if (!g.length) throw new Error(`출발지 ‘${o}’를 지도에서 찾지 못했습니다(설정에서 주소로 고쳐 주세요)`);
+  return { ...g[0], name: o };
+}
+function renderTravel() {
+  const t = editing.travel;
+  const txt = $('#edTvTxt');
+  const place = form.location.value.trim();
+  $('#edTvBtn').textContent = t ? '다시 계산' : '이동 시간 계산';
+  $('#edTvBtn').hidden = !!editing.event.readOnly && !t;
+  if (!t) txt.innerHTML = '';
+  else {
+    const { start, allDay } = readWhen();
+    txt.innerHTML = `${esc(travelText(t))}${t.approx ? ' (직선 거리로 어림)' : ''}${allDay ? '' : ` · <b>${fmtTime(start - t.min * 60e3)}</b> 출발`}
+      <small>${esc(t.from)} → ${esc(t.dest?.name || place)}</small>
+      ${allDay ? '' : `<label><input type="checkbox" id="edTvAlert"${t.alert !== false ? ' checked' : ''}> 출발 알림(이 기기)</label>`}`;
+  }
+  renderTvLinks();
+}
+function renderTvLinks() {
+  const place = form.location.value.trim();
+  const links = $('#edTvLinks');
+  links.hidden = !place;
+  links.innerHTML = place ? `길찾기: ${mapLinks(place, editing.travel?.dest).map((l) => `<a href="${esc(l.href)}" target="_blank" rel="noopener">${l.name} ↗</a>`).join('')}` : '';
+}
+$('#edTvTxt').addEventListener('change', (ev) => { if (ev.target.id === 'edTvAlert' && editing.travel) editing.travel.alert = ev.target.checked; });
+$('#edTvBtn').addEventListener('click', async () => {
+  const ed = editing;
+  const place = form.location.value.trim();
+  if (!place) return;
+  const txt = $('#edTvTxt');
+  txt.textContent = '계산 중…';
+  try {
+    const [dests, from] = await Promise.all([geocode(place), originPoint()]);
+    if (editing !== ed) return;
+    if (!dests.length) { txt.textContent = '지도에서 장소를 찾지 못했습니다(도로명 주소로 적으면 더 잘 찾습니다)'; return; }
+    const r = await route(from, dests[0]);
+    if (editing !== ed) return;
+    ed.travel = { ...r, place, dest: dests[0], from: from.name, alert: true };
+    renderTravel();
+  } catch (err) {
+    if (editing === ed) txt.textContent = err.message || '이동 시간을 계산하지 못했습니다';
+  }
+});
+async function openRoute(e) {
+  const links = mapLinks(e.location, travelOf(e)?.dest);
+  const v = await ask({ title: '길찾기', msg: `${e.location}${travelOf(e) ? `\n${travelText(travelOf(e))}` : ''}`, items: links.map((l, i) => ({ label: `${l.name}에서 열기`, value: String(i) })) });
+  if (v) window.open(links[+v].href, '_blank', 'noopener');
+}
+const originIn = $('#originIn');
+originIn.value = localStorage.getItem(K_ORIGIN) || '';
+originIn.addEventListener('change', () => { localStorage.setItem(K_ORIGIN, originIn.value.trim()); toast(originIn.value.trim() ? `출발지: ${originIn.value.trim()}` : '출발지: 현재 위치'); });
+
+/* ---------- 이 기기 알림: 앱(탭)이 열려 있는 동안 브라우저 알림. 서버가 없어 앱을 닫으면 오지 않는다 ---------- */
+
+let notifTimer = 0;
+const notifSupported = () => 'Notification' in window;
+const notifOn = () => localStorage.getItem(K_NOTIF) === '1' && notifSupported() && Notification.permission === 'granted';
+function alertOpts() {
+  const fired = jget(K_FIRED, {});
+  const tv = travelMap();
+  return {
+    calDefaults: Object.fromEntries(S.cals.map((c) => [c.id, c.defaultReminders])),
+    muted: new Set(jget(K_NMUTE, [])),
+    fired: new Set(Object.keys(fired)),
+    travel: Object.fromEntries(Object.entries(tv).filter(([, t]) => t.alert !== false)),
+    firedMap: fired,
+  };
+}
+const alertPool = () => S.events.filter((e) => !S.hiddenEv.has(e.id) && !S.hidden.has(e.calendarId) && !isHoliday(e));
+async function showNote(title, body, data = {}, tag = '') {
+  const opts = { body, tag: tag || `jbcal-${Date.now()}`, data, icon: 'icons/icon-192-v14.png', badge: 'icons/icon-32-v14.png', requireInteraction: true,
+    actions: [{ action: 'snooze', title: '5분 뒤 다시' }, data.join ? { action: 'join', title: '참가' } : { action: 'open', title: '열기' }] };
+  try {
+    const reg = 'serviceWorker' in navigator && !params.has('nosw') ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) { await reg.showNotification(title, opts); return; }
+  } catch { /* 아래로 */ }
+  const { actions, ...plain } = opts;
+  void actions;
+  const n = new Notification(title, plain);
+  n.onclick = () => { window.focus(); if (data.date) { S.cursor = fromDayKey(data.date); S.jump = true; render(); } n.close(); };
+}
+function fireAlert(a) {
+  const e = a.e;
+  const title = a.kind === 'leave' ? `🚗 출발: ${e.title}` : e.title;
+  const body = alertBody(e, a.kind, a.min, (x) => `${fmtTime(x.start)}–${fmtTime(x.end)}`);
+  const cf = confOf(e);
+  showNote(title, body, { id: e.id, date: dayKey(e.start), ...(cf ? { join: cf.url } : {}), title, body }, a.key);
+  if (!document.hidden) toast(`🔔 ${title} · ${body}`);
+}
+async function checkAlerts() {
+  clearTimeout(notifTimer);
+  if (!notifOn() || S.needsLogin) return;
+  // 15분마다 일정을 새로 받아 둔다(다른 기기에서 바꾼 것 반영)
+  if (S.loaded && Date.now() - S.loaded.at > 15 * 60e3) await ensureEvents(true);
+  const now = Date.now();
+  const o = alertOpts();
+  const due = dueAlerts(alertPool(), now, o);
+  for (const a of due) { fireAlert(a); o.firedMap[a.key] = now; }
+  if (due.length) {
+    for (const [k, t] of Object.entries(o.firedMap)) if (now - t > 3 * DAY) delete o.firedMap[k];
+    localStorage.setItem(K_FIRED, JSON.stringify(o.firedMap));
+  }
+  const next = nextAlertAt(alertPool(), now, o);
+  notifTimer = setTimeout(checkAlerts, Math.max(1000, Math.min(next ? next - now + 300 : 60e3, 60e3)));
+}
+function syncNotifUI() {
+  $('#notifChk').checked = notifOn();
+  $('#notifMore').hidden = !notifOn();
+}
+function initNotif() {
+  syncNotifUI();
+  if (localStorage.getItem(K_NOTIF) === '1' && notifSupported() && Notification.permission !== 'granted') localStorage.removeItem(K_NOTIF);
+  checkAlerts();
+}
+$('#notifChk').addEventListener('change', async (ev) => {
+  if (!ev.target.checked) { localStorage.removeItem(K_NOTIF); clearTimeout(notifTimer); syncNotifUI(); toast('이 기기 알림을 껐습니다'); return; }
+  if (!notifSupported()) { ev.target.checked = false; toast('이 브라우저는 알림을 지원하지 않습니다(아이폰은 홈 화면에 추가한 앱에서)'); return; }
+  const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  if (perm !== 'granted') { ev.target.checked = false; toast('브라우저 알림 권한이 꺼져 있습니다(브라우저·시스템 설정에서 허용)'); return; }
+  localStorage.setItem(K_NOTIF, '1');
+  // 켠 순간 이미 지난 알림은 보내지 않는다
+  const o = alertOpts();
+  const now = Date.now();
+  for (const a of dueAlerts(alertPool(), now, o)) o.firedMap[a.key] = now;
+  localStorage.setItem(K_FIRED, JSON.stringify(o.firedMap));
+  syncNotifUI();
+  checkAlerts();
+  toast('이 기기 알림을 켰습니다 · 앱이 열려 있는 동안(최소화 포함) 일정 알림을 띄웁니다');
+});
+$('#notifTest').addEventListener('click', () => showNote("JB's 캘린더 시험 알림", '알림이 이렇게 뜹니다 · 5분 뒤 다시 누르면 5분 뒤 한 번 더', { date: dayKey(Date.now()) }));
+$('#notifCals').addEventListener('click', async () => {
+  for (;;) {
+    const muted = new Set(jget(K_NMUTE, []));
+    const v = await ask({ title: '캘린더별 이 기기 알림', msg: '누르면 켜기·끄기가 바뀝니다.', cancel: '완료',
+      items: S.cals.filter((c) => !isHoliday({ calendarId: c.id })).map((c) => ({ label: `${muted.has(c.id) ? '🔕 끔' : '🔔 켬'} · ${c.name}`, value: c.id, dot: c.color })) });
+    if (!v) return;
+    if (muted.has(v)) muted.delete(v); else muted.add(v);
+    localStorage.setItem(K_NMUTE, JSON.stringify([...muted]));
+  }
+});
+// 서비스 워커가 알림 「5분 뒤 다시」를 앱에 넘기면 5분 뒤 다시 띄운다
+navigator.serviceWorker?.addEventListener('message', (ev) => {
+  const d = ev.data;
+  if (d?.type === 'snooze' && d.data) setTimeout(() => showNote(d.data.title || '일정 알림', d.data.body || '', d.data), 5 * 60e3);
+  if (d?.type === 'open' && d.date) { S.cursor = fromDayKey(d.date); S.jump = true; render(); }
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkAlerts(); });
+
+/* ---------- 구글 캘린더: 색(모든 기기)·구독·새 캘린더 ---------- */
+
+async function reloadCals() {
+  S.cals = await S.store.calendars();
+  paintCals();
+  S.loaded = null;
+  searchPool = null;
+  await render({ refetch: true });
+}
+async function setGoogleCalColor(id, hex) {
+  const c = calById(id);
+  if (!c) return;
+  if (!(await needFeature('calendars', { then: 'calColor', id, hex }))) return;
+  const ok = await guardedFeature('calendars', () => S.store.setCalendarColor(id, hex), { then: 'calColor', id, hex });
+  if (!ok) return;
+  delete S.calColors[id];
+  localStorage.setItem(K_CALCOL, JSON.stringify(S.calColors));
+  c.origColor = hex;
+  paintCals();
+  render();
+  toast(`‘${c.name}’ 구글 캘린더 색을 바꿨습니다(모든 기기)`);
+}
+const PUBLIC_CALS = [
+  ['ko.south_korea#holiday@group.v.calendar.google.com', '대한민국 공휴일'],
+  ['ja.japanese#holiday@group.v.calendar.google.com', '일본 공휴일'],
+  ['zh.china#holiday@group.v.calendar.google.com', '중국 공휴일'],
+  ['en.usa#holiday@group.v.calendar.google.com', '미국 공휴일'],
+  ['ht3jlfaac5lfd6263ulfh4tql8@group.calendar.google.com', '달의 위상'],
+];
+async function calManage(step = '') {
+  const v = step || await ask({
+    title: '캘린더 추가·구독',
+    msg: '구글 캘린더 목록에 바로 반영됩니다(모든 기기).',
+    items: [
+      { label: '새 캘린더 만들기…', value: 'create' },
+      { label: '공휴일·공개 캘린더 구독…', value: 'public' },
+      { label: '캘린더 ID·이메일로 구독…', value: 'byid' },
+      { label: '웹 주소(ICS)로 구독 — 구글 캘린더 웹에서 ↗', value: 'ics' },
+      { label: '구독 해제…', value: 'unsub' },
+    ],
+  });
+  if (!v) return;
+  if (v === 'ics') { window.open('https://calendar.google.com/calendar/u/0/r/settings/addbyurl', '_blank', 'noopener'); toast('구글 캘린더 웹에서 주소를 넣은 뒤 이 앱을 새로 고치면 보입니다'); return; }
+  if (!(await needFeature('calendars', { then: 'calManage', step: v }))) return;
+  if (v === 'create') {
+    const ok = await ask({ title: '새 캘린더', msg: '구글 계정에 새 캘린더를 만듭니다.',
+      input: `<input type="text" name="ncName" placeholder="이름 (예: 운동 기록)" aria-label="캘린더 이름"><select name="ncColor" aria-label="색">${PALETTE.map(([l, hex]) => `<option value="${hex}">${l}</option>`).join('')}</select>`,
+      items: [{ label: '만들기', value: 'ok' }] });
+    const name = askDlg.querySelector('[name=ncName]')?.value.trim();
+    const hex = askDlg.querySelector('[name=ncColor]')?.value;
+    if (ok !== 'ok' || !name) return;
+    const c = await guardedFeature('calendars', () => S.store.createCalendar(name, hex), { then: 'calManage', step: v });
+    if (!c) return;
+    await reloadCals();
+    toast(`‘${name}’ 캘린더를 만들었습니다`);
+    return;
+  }
+  if (v === 'public' || v === 'byid') {
+    let id = '';
+    if (v === 'public') {
+      id = await ask({ title: '공개 캘린더 구독', items: PUBLIC_CALS.map(([cid, name]) => ({ label: `${name}${calById(cid) ? ' (구독 중)' : ''}`, value: cid })) });
+    } else {
+      const ok = await ask({ title: '캘린더 ID·이메일로 구독', msg: '상대가 공유한 캘린더 ID(…@group.calendar.google.com)나 구글 이메일',
+        input: '<input type="text" name="subId" placeholder="someone@gmail.com" aria-label="캘린더 ID">', items: [{ label: '구독', value: 'ok' }] });
+      id = ok === 'ok' ? askDlg.querySelector('[name=subId]')?.value.trim() : '';
+    }
+    if (!id) return;
+    if (calById(id)) { toast('이미 목록에 있는 캘린더입니다'); return; }
+    const c = await guardedFeature('calendars', () => S.store.subscribeCalendar(id), { then: 'calManage', step: v });
+    if (!c) return;
+    await reloadCals();
+    toast(`‘${c.name || id}’ 캘린더를 구독했습니다`);
+    return;
+  }
+  if (v === 'unsub') {
+    const list = S.cals.filter((c) => !c.primary && !c.owner);
+    if (!list.length) { toast('구독 해제할 수 있는 캘린더가 없습니다(내가 만든 캘린더는 구글 캘린더 웹에서 지웁니다)'); return; }
+    const id = await ask({ title: '구독 해제', msg: '내 목록에서만 빠집니다(캘린더와 일정은 그대로).', items: list.map((c) => ({ label: c.name, value: c.id, dot: c.color, danger: true })) });
+    if (!id) return;
+    const ok = await guardedFeature('calendars', () => S.store.unsubscribeCalendar(id), { then: 'calManage', step: v });
+    if (!ok) return;
+    await reloadCals();
+    toast('구독을 해제했습니다');
+  }
+}
+$('#calManage').addEventListener('click', () => calManage());
+$('#featBtn').addEventListener('click', featureList);
+
+/* ---------- 빠른 입력: 클립보드 붙여넣기(누를 때만 읽는다) ---------- */
+$('#qsPaste').hidden = !navigator.clipboard?.readText;
+$('#qsPaste').addEventListener('click', async () => {
+  try {
+    const t = (await navigator.clipboard.readText()).trim().replace(/\s*\n\s*/g, ' ');
+    if (!t) { toast('클립보드가 비어 있습니다'); return; }
+    quick.value = t;
+    quick.dispatchEvent(new Event('input'));
+    quick.focus();
+  } catch { toast('클립보드를 읽지 못했습니다(브라우저 권한)'); }
+});
+
 /* ---------- 시작 ---------- */
 
 async function start() {
@@ -3146,8 +3731,11 @@ async function start() {
     }
   }
   if (redirect?.ok) sessionStorage.removeItem('nanal.silentTried');
+  // 기능 권한(첨부·연락처·가용 시간·캘린더 관리) 동의 화면에서 돌아왔으면 이어서 한다
+  const resume = redirect ? sget(K_RESUME) : null;
+  if (redirect) sessionStorage.removeItem(K_RESUME);
   // 할 일 권한 동의 화면에서 취소한 경우: 캘린더 토큰은 그대로라 안내만 한다
-  if (redirect?.error && getToken()) toast('할 일 권한을 허용하지 않았습니다. 캘린더는 그대로 쓸 수 있습니다');
+  if (redirect?.error && getToken() && !resume) toast('할 일 권한을 허용하지 않았습니다. 캘린더는 그대로 쓸 수 있습니다');
   // 방금 동의 화면에서 할 일만 빼고 허용했으면 띠를 다시 띄우지 않는다(조용한 토큰 갱신은 해당 없음)
   if (redirect && sessionStorage.getItem('nanal.askedTasks')) {
     sessionStorage.removeItem('nanal.askedTasks');
@@ -3156,6 +3744,8 @@ async function start() {
   placeAccount();
   await render();
   loadWeather();
+  if (resume && Date.now() - (resume.at || 0) < 30 * 60e3) await resumeFeature(resume);
+  initNotif();
   // ?q=문장 : 빠른 입력창을 채운 상태로 연다(공유 링크·화면 확인용, 저장은 하지 않음)
   if (params.get('q')) openQuick(params.get('q'));
 }
