@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- JB's 캘린더 앱 아이콘(모서리 없는 전체 채움판: 아이폰 홈 화면·maskable) — 빨간 윗부분 + 날짜 숫자 -->
+  <rect width="512" height="512" fill="#ffffff"/>
+  <rect width="512" height="176" fill="#e53935"/>
+  <!-- 고리 두 개 (maskable 안전 영역 안쪽) -->
+  <rect x="160" y="88" width="28" height="62" rx="14" fill="#ffffff"/>
+  <rect x="324" y="88" width="28" height="62" rx="14" fill="#ffffff"/>
+  <text x="256" y="414" text-anchor="middle" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="700" font-size="220" letter-spacing="-7" fill="#202124">17</text>
+</svg>

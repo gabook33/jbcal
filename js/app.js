@@ -1096,7 +1096,7 @@ function closeDayPop() {
 function renderWelcome() {
   $('#view').className = 'view';
   $('#view').innerHTML = `<div class="welcome">
-    <img src="icons/icon.svg" alt="" width="72" height="72">
+    <img src="icons/icon-v12.svg" alt="" width="72" height="72">
     <h2>${esc(CONFIG.appName)}에 오신 것을 환영합니다</h2>
     <p>구글 캘린더를 연결하면 일정을 보고, 추가하고, 고칠 수 있어요.</p>
     <button class="btn primary big" data-act="login">구글 캘린더 연결</button>
@@ -1266,12 +1266,14 @@ const form = $('#editorForm');
 let editing = null; // {event, isNew}
 
 function openEditor(e, isNew = false) {
-  editing = { event: e, isNew, reminder: String(e.reminder ?? 'default') };
+  editing = { event: e, isNew, reminder: String(e.reminder ?? 'default'), parsed: null, whenTouched: false };
   const ro = !!e.readOnly;
   const cals = ro ? S.cals.filter((c) => c.id === e.calendarId) : writableCals();
   form.calendarId.innerHTML = cals.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
   form.calendarId.value = e.calendarId;
   form.title.value = isNew ? '' : e.title;
+  form.title.placeholder = isNew ? '제목 (예: 회의 14:00, 내일 오후 3시 면담)' : '제목';
+  $('#edParse').hidden = true;
   form.allDay.checked = e.allDay;
   form.sDate.value = dayKey(e.start);
   form.sTime.value = hm(e.start);
@@ -1311,6 +1313,50 @@ function setReminderField(v = 'default') {
 }
 const reminderOf = (v) => (/^\d+$/.test(v) ? +v : v);
 
+/**
+ * 새 일정 제목에 적은 날짜·시간 말(「고병수 부위원장 14:00」, 「내일 3시 회의」)을 Fantastical처럼
+ * 시작·종료 칸에 바로 넣고, 저장할 때 제목에서 그 말을 뺀다. 말을 지우면 처음 값으로 돌아간다.
+ * 시간 칸을 직접 고친 뒤에는 칸을 더 건드리지 않는다(제목 정리는 그대로).
+ */
+function applyTitleWhen() {
+  if (!editing?.isNew) return;
+  const b = editing.event;
+  const text = form.title.value;
+  const r = text.trim() ? parseQuick(text, Date.now(), { baseDay: startOfDay(b.start) }) : null;
+  // 「점심」「저녁」처럼 끼니 말로 짐작한 시간은 쓰지 않는다(고른 칸 시간을 지킨다)
+  const hasTime = !!r && r.hasTime && !r.timeGuessed;
+  const hit = !!r && (hasTime || r.hasDate);
+  editing.parsed = hit ? r : null;
+  const note = $('#edParse');
+  note.hidden = !hit;
+  if (hit) {
+    const when = hasTime ? `${fmtDate(r.start)} ${fmtTime(r.start)} – ${fmtTime(r.end)}` : fmtDate(r.start);
+    note.textContent = `⏱ ${when} · 제목: ${r.title || '새 일정'}`;
+  }
+  if (editing.whenTouched) return;
+  let { start, end, allDay } = b;
+  if (hasTime) {
+    ({ start, end } = r);
+    allDay = false;
+  } else if (hit) {
+    // 날짜만 적었으면 고른 시각·길이는 그대로 두고 날짜만 옮긴다
+    start = r.start + (b.start - startOfDay(b.start));
+    end = start + (b.end - b.start);
+    if (/종일/.test(text)) { allDay = true; end = r.end; start = r.start; }
+  }
+  form.allDay.checked = allDay;
+  form.sDate.value = dayKey(start);
+  form.sTime.value = hm(start);
+  form.eDate.value = dayKey(allDay ? end - DAY : end);
+  form.eTime.value = hm(end);
+  syncEditor();
+}
+form.title.addEventListener('input', applyTitleWhen);
+['allDay', 'sDate', 'sTime', 'eDate', 'eTime'].forEach((n) => {
+  form[n].addEventListener('input', () => { if (editing) editing.whenTouched = true; });
+  form[n].addEventListener('change', () => { if (editing) editing.whenTouched = true; });
+});
+
 function syncEditor() {
   const ad = form.allDay.checked;
   form.sTime.hidden = ad;
@@ -1338,6 +1384,8 @@ dlg.addEventListener('click', (ev) => {
 form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const { event: orig, isNew } = editing;
+  if (isNew) applyTitleWhen();
+  const parsed = isNew ? editing.parsed : null;
   const allDay = form.allDay.checked;
   let start;
   let end;
@@ -1351,10 +1399,10 @@ form.addEventListener('submit', async (ev) => {
   if (end <= start) { toast('종료가 시작보다 늦어야 합니다'); return; }
   const e = {
     ...orig,
-    title: form.title.value.trim() || '새 일정',
+    title: (parsed ? parsed.title : form.title.value.trim()) || '새 일정',
     calendarId: form.calendarId.value,
     allDay, start, end,
-    location: form.location.value.trim(),
+    location: form.location.value.trim() || parsed?.location || '',
     note: form.note.value,
     // 알림을 안 건드렸으면 원래 값(없으면 보내지 않아 구글 쪽 그대로)
     reminder: form.reminder.value === editing.reminder ? orig.reminder : reminderOf(form.reminder.value),

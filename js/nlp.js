@@ -23,12 +23,24 @@ function to24(mer, h) {
   return h >= 1 && h <= 6 ? h + 12 : h;
 }
 
+/**
+ * 휴대폰 키보드가 넣는 전각 글자(１４：００, ～)와 물결표 변형(〜 ∼)을 보통 글자로,
+ * 영어 am/pm(2pm, 2:30 PM, 10am-12pm)을 「오전/오후 h:mm」으로 바꾼다.
+ */
+function normalize(input) {
+  return String(input || '').normalize('NFKC')
+    .replace(/[〜∼]/g, '~').replace(/[—―]/g, '-')
+    .replace(/(\d{1,2})(?:\s*:\s*(\d{2}))?\s*([ap])\.?\s?m\.?(?![a-z])/gi,
+      (_, h, mi, ap) => ` ${/a/i.test(ap) ? '오전' : '오후'} ${h}:${mi || '00'} `)
+    .trim().replace(/\s+/g, ' ');
+}
+
 /** baseDay: 날짜 말이 없을 때 쓸 날(달력에서 고른 날). 없으면 오늘. 「내일」 같은 말은 늘 실제 오늘 기준. */
 export function parseQuick(input, now = Date.now(), { baseDay = null } = {}) {
-  let s = ` ${String(input || '').trim().replace(/\s+/g, ' ')} `;
+  let s = ` ${normalize(input)} `;
   const out = {
     title: '', start: null, end: null, allDay: false,
-    location: '', calendarHint: '', hasDate: false, hasTime: false,
+    location: '', calendarHint: '', hasDate: false, hasTime: false, timeGuessed: false,
   };
   // 정규식에 맞는 부분을 문장에서 떼어내고 콜백에 넘긴다.
   const take = (re, fn) => {
@@ -123,6 +135,7 @@ export function parseQuick(input, now = Date.now(), { baseDay = null } = {}) {
   if (startMin == null && !out.allDay) {
     if (/점심/.test(s)) startMin = 12 * 60;
     else if (/저녁/.test(s)) startMin = 19 * 60;
+    out.timeGuessed = startMin != null;
   }
 
   // 6) 길이: "1시간 30분", "2시간 반", "45분 동안"
