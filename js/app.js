@@ -1608,8 +1608,13 @@ function syncUrlLink() {
   const ok = /^https?:\/\//i.test(u);
   $('#edUrl').hidden = !ok;
   if (ok) $('#edUrl').href = u;
+  // 장소가 있으면 지도(네이버 지도 검색)로
+  const loc = form.location.value.trim();
+  $('#edMap').hidden = !loc;
+  if (loc) $('#edMap').href = `https://map.naver.com/p/search/${encodeURIComponent(loc)}`;
 }
 form.url.addEventListener('input', syncUrlLink);
+form.location.addEventListener('input', syncUrlLink);
 
 /** 알림 고르기: 목록에 없는 값(20분 전 등)은 그 일정에만 보기 하나를 더 붙인다. 여러 개면 칸을 늘린다 */
 function setReminderField(v = 'default') {

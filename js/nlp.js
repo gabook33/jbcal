@@ -40,7 +40,10 @@ function normalize(input) {
 
 /** baseDay: 날짜 말이 없을 때 쓸 날(달력에서 고른 날). 없으면 오늘. 「내일」 같은 말은 늘 실제 오늘 기준. */
 export function parseQuick(input, now = Date.now(), { baseDay = null, defaultDur = 60 } = {}) {
-  let s = ` ${normalize(input)} `;
+  // 따옴표(" " · “ ” · 「 」) 안 글자는 해석하지 않고 그대로 둔다: 「"3시의 고양이" 시사회 내일 7시」
+  const quoted = [];
+  let s = ` ${normalize(input).replace(/"([^"]+)"|“([^”]+)”|「([^」]+)」/g, (_, a, b, c) => { quoted.push(a ?? b ?? c); return `\uE000${String.fromCharCode(0xE100 + quoted.length - 1)}`; })} `;
+  const unq = (t) => t.replace(/\uE000([\uE100-\uE1FF])/g, (_, ch) => quoted[ch.charCodeAt(0) - 0xE100]);
   const out = {
     title: '', start: null, end: null, allDay: false,
     location: '', calendarHint: '', hasDate: false, hasTime: false, timeGuessed: false,
@@ -243,6 +246,12 @@ export function parseQuick(input, now = Date.now(), { baseDay = null, defaultDur
     .join(' ')
     .replace(/^[,·\s]+|[,·\s]+$/g, '')
     .trim();
+  if (quoted.length) {
+    out.title = unq(out.title);
+    out.location = unq(out.location);
+    out.note = unq(out.note);
+    out.calendarHint = unq(out.calendarHint);
+  }
   return out;
 }
 
