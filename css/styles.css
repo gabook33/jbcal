@@ -966,3 +966,114 @@ input, select, textarea { font: inherit; color: inherit; }
   .row input:not([type=checkbox]), .row select, .row textarea { font-size: 16px; } /* 16px 미만이면 iOS가 확대함 */
   .toast { bottom: calc(max(12px, env(safe-area-inset-bottom) - 5px) + 60px); }
 }
+
+/* ===== 2026-11-18 기능 보강: 확인 시트, 밀기 버튼, 편집 창 새 칸, 끌어 옮기기, 템플릿 ===== */
+
+/* 확인·선택 시트: 휴대폰은 아래에서 올라오는 시트, 데스크톱은 가운데 작은 창 */
+.ask { border: 0; padding: 0; background: transparent; width: min(380px, 94vw); max-height: 86dvh; color: var(--text); overflow: visible; }
+.ask::backdrop { background: rgb(0 0 0 / .32); }
+.ask[open] { animation: sheet-in .2s cubic-bezier(.2, .9, .3, 1); }
+.ask-box { display: flex; flex-direction: column; gap: 8px; max-height: 86dvh; }
+.ask-head, .ask-items { background: var(--card); border-radius: 14px; overflow: hidden; }
+.ask-head { padding: 14px 16px 12px; text-align: center; }
+.ask-head strong { display: block; font-size: 15px; font-weight: 700; }
+.ask-head p { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.ask-in { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+.ask-in input { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 16px; background: var(--bg); min-width: 0; }
+.ask-in input[type=text] { flex: 1; }
+.ask-ck { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; margin-top: 10px; }
+.ask-ck input { accent-color: var(--accent); width: 18px; height: 18px; }
+.ask-items { overflow-y: auto; }
+.ask-i { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 14px 12px; font-size: 17px; color: var(--sat); background: var(--card); }
+.ask-items .ask-i + .ask-i { border-top: var(--hair) solid var(--line); }
+.ask-i.danger { color: #ff3b30; }
+.ask-i:active, .ask-i:hover { background: var(--line-soft); }
+.ask-i i { width: 14px; height: 14px; border-radius: 50%; background: var(--c); flex: none; }
+.ask-cancel { border-radius: 14px; font-weight: 600; }
+@media (max-width: 760px) {
+  .ask { margin: auto auto 0; width: 100vw; max-width: none; padding: 0 8px calc(8px + env(safe-area-inset-bottom)); }
+  .ask-items:has(.ask-i i) { display: grid; grid-template-columns: 1fr 1fr; }
+  .ask-items:has(.ask-i i) .ask-i { border-top: var(--hair) solid var(--line); justify-content: flex-start; padding-left: 18px; }
+}
+
+/* 휴대폰 목록 밀기: 줄 뒤에 버튼(오른쪽 = 더 보기·삭제, 왼쪽 = 할 일 완료) */
+.m-list .ag-ev, .m-list .tsk, #tasksBody .tsk { touch-action: pan-y; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.sw { position: relative; overflow: hidden; }
+.m-ads .sw { align-self: stretch; }
+.sw > .ag-ev, .sw > .tsk { position: relative; z-index: 1; background: var(--m-bg); width: 100%; }
+.m-ads .sw > .m-allday { width: auto; }
+#tasksBody .sw > .tsk { background: var(--grouped); }
+.sw-acts { position: absolute; top: 0; bottom: 0; display: flex; visibility: hidden; }
+.sw-r { right: 0; }
+.sw-l { left: 0; }
+.sw.show-r .sw-r, .sw.show-l .sw-l { visibility: visible; }
+.sw-b { width: 74px; display: grid; place-items: center; color: #fff; font-size: 15px; font-weight: 600; }
+.sw-b.del { background: #ff3b30; }
+.sw-b.sw-more { background: #8e8e93; }
+.sw-b.done { background: #34c759; }
+.ag-ev.lp, .tsk.lp { background: rgb(255 255 255 / .12) !important; transition: background .2s; }
+
+/* 제목 뒤 작은 표시 */
+.bdg { display: inline-block; margin-left: 6px; font-size: .72em; color: var(--m-gray, var(--muted)); vertical-align: 1px; }
+.bdg.join { color: #fff; background: #34c759; border-radius: 99px; padding: 1px 8px; font-weight: 700; cursor: pointer; }
+
+/* 편집 창 새 칸 */
+.ed-sub { font-size: 12px; color: var(--accent); margin: -2px 0 8px 64px; }
+.rep-end-in { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.rep-end-in input[type=number] { width: 72px; }
+.row.rep-end { grid-template-columns: 56px 1fr; }
+.al-row { align-items: start; }
+.al-row > span { padding-top: 6px; }
+.alerts { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.al-more { display: flex; gap: 6px; align-items: center; }
+.al-more select { flex: 1; }
+.al-del, .att-del { width: 22px; height: 22px; border-radius: 50%; background: var(--line); color: var(--text); font-size: 14px; line-height: 22px; flex: none; }
+.al-add { align-self: flex-start; margin: 0; }
+.att-row { gap: 6px; }
+.att-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.att-list:empty { display: none; }
+.att { display: inline-flex; align-items: center; gap: 5px; background: var(--grouped); border-radius: 99px; padding: 3px 4px 3px 9px; font-size: 13px; color: var(--text); }
+.att b { font-size: 11px; color: var(--muted); }
+.att-accepted b { color: #34c759; }
+.att-declined b { color: #ff3b30; }
+.att small { color: var(--muted); }
+.row.switch { grid-template-columns: 1fr auto; }
+
+/* 캘린더 목록: 색 바꾸기 점 */
+.cal-color { margin-left: auto; width: 18px; height: 18px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px rgb(255 255 255 / .25); flex: none; }
+.cal-item .cal-ro + .cal-color { margin-left: 8px; }
+.cs-sets select { max-width: 150px; }
+.cs-btns { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.cal-set input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+
+/* 빠른 입력: 템플릿 */
+.qs-tpl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 2px 0; }
+.tpl-h { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.tpl { display: inline-flex; align-items: center; border-radius: 99px; background: color-mix(in srgb, var(--accent) 8%, var(--card)); overflow: hidden; }
+.tpl > button:first-child { padding: 4px 4px 4px 10px; font-size: 13px; }
+.tpl > button:first-child::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 5px; }
+.tpl.on { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.tpl-del { padding: 4px 9px 4px 4px; color: var(--muted); }
+
+/* 데스크톱: 끌어 옮기기·길이 바꾸기 */
+.tg-ev .rz { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
+.tg-ev.dragging, .chip.dragging, .mv-bar.dragging { opacity: .85; z-index: 20; box-shadow: 0 6px 18px rgb(0 0 0 / .25); }
+body.is-dragging { cursor: grabbing; user-select: none; }
+.mv-cell.drop { background: color-mix(in srgb, var(--accent) 14%, transparent) !important; }
+.mv-wk { position: absolute; right: 3px; bottom: 2px; font-size: 10px; color: var(--muted); pointer-events: none; }
+.mv-week { position: relative; }
+
+@media (max-width: 760px) {
+  /* ☰ 시트에도 설정(주 시작 제외)·캘린더 묶음 */
+  .sidebar .cal-set { display: block; background: var(--card); border-radius: var(--r); margin-top: 14px; padding: 6px 14px; border: 0; }
+  .sidebar .cs-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; font-size: 16px; color: var(--text); }
+  .sidebar .cs-row + .cs-row { border-top: var(--hair) solid var(--line); }
+  .sidebar .cs-row select { font-size: 16px; border: 0; background: transparent; color: var(--accent); text-align: right; }
+  .sidebar .cs-row:first-child { display: none; } /* 휴대폰은 늘 일요일 시작 */
+  .sidebar .cs-btns .link-btn, .sidebar #unhideBtn { font-size: 15px; padding: 8px 0; }
+  .m-menu-acts { flex-wrap: wrap; }
+  /* 일·3일 보기: 가로 밀기는 앱이 받는다(앞뒤 날), 세로는 스크롤 */
+  #view.v-day .tg, #view.v-week .tg, #view.v-day .tg-scroll, #view.v-week .tg-scroll { touch-action: pan-y; }
+  .m-menu-acts button { font-size: 15px; min-width: calc(50% - 5px); }
+  #calList .cal-color { width: 22px; height: 22px; }
+}

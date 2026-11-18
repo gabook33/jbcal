@@ -1,6 +1,7 @@
 // 데모 모드 저장소: 구글 연결 없이 예시 일정으로 화면을 확인한다.
 // 추가·수정·삭제는 이 기기(localStorage)에만 저장된다.
 import { P, T, DAY, startOfDay } from './time.js';
+import { ruleOf, expand, truncateBefore, untilStr } from './recur.js';
 
 const K = 'nanal.demo.v1';
 
@@ -49,6 +50,10 @@ function seed(now) {
   allDay(-2, 1, 'work', '월간 보고 마감');
   at(12, 10, 0, 60, 'work', '분기 전략 회의');
   at(15, 19, 0, 120, 'family', '결혼기념일 저녁', '한남동');
+  // 반복 일정(구글처럼 원본 하나 + RRULE): 오늘 뒤 첫 목요일부터 매주 목요일 오후 4시
+  const thu = today + (((4 - P(today).dow + 7) % 7) || 7) * DAY;
+  evs.push({ id: 'r1', calendarId: 'work', title: '주간 업무 회의', location: '소회의실', note: '', allDay: false,
+    start: thu + 16 * 3600e3, end: thu + 17 * 3600e3, recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH'], exdates: [] });
 
   // 공휴일 (데모 기간 근처의 실제 날짜)
   const y = P(now).y;
@@ -81,6 +86,19 @@ export function resetDemo() {
   localStorage.removeItem(KT);
 }
 
+// 반복 원본(recurrence 있음)은 읽을 때 회차로 펼친다. 회차 id = 원본id_시작(UTC), 회차를 고치면 따로 저장(예외),
+// 「이 일정만」 지우면 원본 exdates 에 그 회차 시작을 넣는다(구글과 같은 모양).
+const instId = (masterId, ts, allDay) => `${masterId}_${untilStr(ts, allDay)}`;
+function expandMaster(m, all, from, to) {
+  const dur = m.end - m.start;
+  const moved = new Set(all.filter((x) => x.recurringEventId === m.id).map((x) => x.originalStart));
+  const { recurrence, exdates, ...base } = m;
+  void recurrence;
+  return expand(ruleOf(m.recurrence), m.start, from - dur, to, { exdates: exdates || [] })
+    .filter((ts) => !moved.has(ts) && ts + dur > from)
+    .map((ts) => ({ ...base, id: instId(m.id, ts, m.allDay), start: ts, end: ts + dur, recurringEventId: m.id, originalStart: ts, recurring: true }));
+}
+
 export const demoStore = {
   kind: 'demo',
   async calendars() {
@@ -89,24 +107,66 @@ export const demoStore = {
   async events(cals, from, to) {
     const ids = new Set(cals.map((c) => c.id));
     const ro = new Set(CALS.filter((c) => c.readOnly).map((c) => c.id));
-    return load()
-      .filter((e) => ids.has(e.calendarId) && e.end > from && e.start < to)
-      .map((e) => ({ ...e, readOnly: ro.has(e.calendarId) }));
+    const all = load();
+    const out = [];
+    for (const e of all) {
+      if (!ids.has(e.calendarId)) continue;
+      if (e.recurrence?.length) out.push(...expandMaster(e, all, from, to));
+      else if (e.end > from && e.start < to) out.push({ ...e, ...(e.recurringEventId ? { recurring: true } : {}) });
+    }
+    return out.map((e) => ({ ...e, readOnly: ro.has(e.calendarId) }));
+  },
+  async get(calendarId, id) {
+    const e = load().find((x) => x.id === id);
+    return e ? { ...e, recurring: !!(e.recurrence || e.recurringEventId) } : null;
   },
   async create(e) {
     const evs = load();
-    const ne = { ...e, id: `u${Date.now().toString(36)}` };
+    const { notify, addMeet, ...rest } = e;
+    void notify;
+    const ne = { ...rest, id: `u${Date.now().toString(36)}${evs.length}`, ...(addMeet ? { meet: 'https://meet.google.com/demo-meet-link' } : {}) };
+    if (ne.recurrence?.length) ne.exdates = [];
     evs.push(ne);
     save(evs);
     return ne;
   },
   async update(e) {
-    const evs = load().map((x) => (x.id === e.id ? { ...e } : x));
-    save(evs);
-    return e;
+    const evs = load();
+    const { notify, addMeet, recurring, readOnly, ...rest } = e;
+    void notify; void recurring; void readOnly;
+    const ne = { ...rest, ...(addMeet && !e.meet ? { meet: 'https://meet.google.com/demo-meet-link' } : {}) };
+    if (evs.some((x) => x.id === e.id)) save(evs.map((x) => (x.id === e.id ? ne : x)));
+    else save([...evs, ne]); // 처음 고친 반복 회차 → 예외로 저장
+    return { ...ne, ...(ne.recurringEventId || ne.recurrence ? { recurring: true } : {}) };
   },
   async remove(e) {
-    save(load().filter((x) => x.id !== e.id));
+    let evs = load().filter((x) => x.id !== e.id);
+    if (e.recurringEventId) {
+      evs = evs.map((x) => (x.id === e.recurringEventId ? { ...x, exdates: [...(x.exdates || []), e.originalStart] } : x));
+    } else {
+      evs = evs.filter((x) => x.recurringEventId !== e.id); // 원본을 지우면 예외 회차도
+    }
+    save(evs);
+  },
+  async removeFollowing(e) {
+    const evs = load();
+    const m = evs.find((x) => x.id === e.recurringEventId);
+    if (!m) return { deletedAll: true };
+    const cut = e.originalStart ?? e.start;
+    if (cut <= m.start) {
+      save(evs.filter((x) => x.id !== m.id && x.recurringEventId !== m.id));
+      return { deletedAll: true };
+    }
+    const prev = m.recurrence;
+    save(evs.filter((x) => !(x.recurringEventId === m.id && x.originalStart >= cut))
+      .map((x) => (x.id === m.id ? { ...x, recurrence: truncateBefore(prev, cut, m.allDay) } : x)));
+    return { masterId: m.id, prev };
+  },
+  async setRecurrence(calendarId, masterId, recurrence) {
+    save(load().map((x) => (x.id === masterId ? { ...x, recurrence } : x)));
+  },
+  async restoreInstance(e) {
+    save(load().map((x) => (x.id === e.recurringEventId ? { ...x, exdates: (x.exdates || []).filter((t) => t !== e.originalStart) } : x)));
   },
 };
 

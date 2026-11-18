@@ -36,7 +36,8 @@
             placeholder="빠른 입력: 내일 오후 3시 팀 회의 @본관 /업무" aria-label="자연어로 일정 추가">
           <div class="quick-preview" id="quickPreview" hidden></div>
         </form>
-        <p class="qs-hint">예) 내일 오후 3시 팀 회의 @본관 /업무 · 다음주 금요일 7시~9시 저녁 · 모레 종일 연차 · 3일 후 마감</p>
+        <p class="qs-hint">예) 내일 오후 3시 팀 회의 @본관 /업무 · 매주 월수금 9시 스탠드업 · 격주 금요일 3시 보고 12월 31일까지 · 내일 2시 면담 알림 10분 전 · 할 일: 보고서 제출</p>
+        <div class="qs-tpl" id="qsTpl" hidden></div>
       </div>
       <div class="account" id="account">
         <span class="badge" id="modeBadge" hidden>데모</span>
@@ -64,6 +65,7 @@
       <div class="m-menu-acts">
         <button type="button" id="mTodayBtn">오늘로 이동</button>
         <button type="button" id="mViewBtn">3일 보기</button>
+        <button type="button" id="mDayBtn">일 보기</button>
         <button type="button" id="mTasksBtn">할 일</button>
       </div>
       <section class="mini" id="mini"></section>
@@ -88,6 +90,18 @@
               <option value="0">일요일</option>
             </select>
           </label>
+          <label class="cs-row">기본 캘린더 <select id="defCalSel" aria-label="새 일정 기본 캘린더"></select></label>
+          <label class="cs-row">기본 길이
+            <select id="defDurSel" aria-label="새 일정 기본 길이">
+              <option value="15">15분</option><option value="30">30분</option><option value="60">1시간</option>
+              <option value="90">1시간 30분</option><option value="120">2시간</option>
+            </select>
+          </label>
+          <label class="cs-row">주 번호 표시 <input type="checkbox" id="weekNumChk"></label>
+          <div class="cs-row cs-sets">캘린더 묶음
+            <select id="setSel" aria-label="캘린더 묶음"></select>
+          </div>
+          <div class="cs-btns"><button type="button" class="link-btn" id="setSave">지금 켠 캘린더를 묶음으로 저장</button><button type="button" class="link-btn" id="setDel" hidden>이 묶음 지우기</button></div>
           <button type="button" class="link-btn" id="unhideBtn" hidden></button>
         </div>
       </section>
@@ -197,23 +211,53 @@
           <span>종료</span>
           <input type="date" name="eDate" required><input type="time" name="eTime" step="300">
         </div>
-        <label class="row">알림
-          <select name="reminder">
-            <option value="none">없음</option>
-            <option value="default">기본</option>
-            <option value="5">5분 전</option>
-            <option value="10">10분 전</option>
-            <option value="15">15분 전</option>
-            <option value="30">30분 전</option>
-            <option value="60">1시간 전</option>
-            <option value="1440">1일 전</option>
-          </select>
-        </label>
+        <label class="row">반복 <select name="repeat" aria-label="반복"></select></label>
+        <div class="row rep-end" id="edRepEnd" hidden>
+          <span>끝</span>
+          <span class="rep-end-in">
+            <select name="repeatEnd" aria-label="반복 끝"><option value="never">계속</option><option value="until">날짜까지</option><option value="count">횟수</option></select>
+            <input type="date" name="repeatUntil" aria-label="반복 끝 날짜"><input type="number" name="repeatCount" min="1" max="730" value="10" aria-label="반복 횟수">
+          </span>
+        </div>
+        <p class="ed-sub" id="edRepText" hidden></p>
+        <div class="row al-row"><span>알림</span>
+          <div class="alerts" id="edAlerts">
+            <select name="reminder" class="al-sel" aria-label="알림">
+              <option value="none">없음</option>
+              <option value="default">기본</option>
+              <option value="0">일정 시작</option>
+              <option value="5">5분 전</option>
+              <option value="10">10분 전</option>
+              <option value="15">15분 전</option>
+              <option value="30">30분 전</option>
+              <option value="60">1시간 전</option>
+              <option value="120">2시간 전</option>
+              <option value="1440">1일 전</option>
+              <option value="2880">2일 전</option>
+              <option value="10080">1주 전</option>
+            </select>
+            <button type="button" class="link-btn al-add" id="edAlAdd">＋ 알림 추가</button>
+          </div>
+        </div>
+        <label class="row">시간대 <select name="tz" aria-label="시간대"></select></label>
+        <p class="ed-sub" id="edTzText" hidden></p>
+        <label class="row">표시 <select name="avail" aria-label="바쁨·한가함"><option value="busy">바쁨</option><option value="free">한가함</option></select></label>
       </div>
       <div class="ed-group">
         <label class="row">장소 <input name="location" placeholder="장소 추가"></label>
+        <label class="row">URL <input name="url" type="url" inputmode="url" placeholder="https://"></label>
         <label class="row col">메모 <textarea name="note" rows="3" placeholder="메모"></textarea></label>
       </div>
+      <div class="ed-group">
+        <div class="row col att-row"><span>참석자</span>
+          <div class="att-list" id="edAtt"></div>
+          <input name="attIn" type="email" inputmode="email" enterkeyhint="done" placeholder="이메일 넣고 Enter" aria-label="참석자 이메일 추가">
+        </div>
+        <label class="row switch" id="edNotifyRow" hidden>참석자에게 메일 보내기 <input type="checkbox" name="notify"></label>
+        <label class="row switch" id="edMeetRow">Google Meet 화상회의 추가 <input type="checkbox" name="addMeet"></label>
+      </div>
+      <a class="ed-link" id="edMeet" target="_blank" rel="noopener" hidden>화상회의 참가 ↗</a>
+      <a class="ed-link" id="edUrl" target="_blank" rel="noopener" hidden>URL 열기 ↗</a>
       <a class="ed-link" id="edLink" target="_blank" rel="noopener" hidden>구글 캘린더에서 열기 ↗</a>
       <div class="ed-actions">
         <button type="button" class="btn danger" id="edDelete">삭제</button>
@@ -248,6 +292,9 @@
       </div>
     </form>
   </dialog>
+
+  <!-- 확인·선택 시트: 삭제 확인(반복이면 이 일정만/이후 모두), 길게 누름·「더 보기」 메뉴, 날짜 옮기기 -->
+  <dialog class="ask" id="ask" aria-labelledby="askTitle"></dialog>
 
   <div class="toast" id="toast" hidden></div>
   <script type="module" src="js/app.js"></script>

@@ -10,6 +10,7 @@ import {
   googleTasks, hasTasksScope, ScopeError, ApiDisabledError,
 } from './gcal.js';
 import { tasksForDay, groupTasks } from './tasks.js';
+import { ruleOf, buildRRule, describeRule, presetRule, presetOf, REPEAT_OPTIONS } from './recur.js';
 
 /* ---------- 준비 ---------- */
 
@@ -27,6 +28,13 @@ const K_HIDEV = 'nanal.hiddenEvents'; // 오른쪽 클릭 「숨기기」로 이
 const K_SBTAB = 'nanal.sbTab'; // 데스크톱 왼쪽 목록: 'ev' 날짜별 일정(기본) / 'tasks' 할 일
 const K_TLIST = 'nanal.taskList'; // 새 할 일을 넣을 목록(마지막에 고른 것)
 const K_ASK = 'nanal.tasksAskLater'; // 할 일 권한 안내 띠에서 「나중에」를 눌렀음
+const K_CALCOL = 'nanal.calColors'; // 캘린더 색(이 기기에서만 바꾼 색)
+const K_SETS = 'nanal.calSets'; // 캘린더 묶음 [{name, hidden:[…]}]
+const K_DEFCAL = 'nanal.defCal'; // 새 일정 기본 캘린더
+const K_DUR = 'nanal.defDur'; // 새 일정 기본 길이(분)
+const K_WKNUM = 'nanal.weekNum'; // 월 보기 주 번호
+const K_TPL = 'nanal.templates'; // 일정 템플릿
+const jget = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const TASKS_KEY = '__tasks'; // 캘린더 켜기·끄기 목록에서 「할 일」 줄(S.hidden 에 같이 저장)
 
 if (params.has('reset-demo')) resetDemo();
@@ -68,6 +76,11 @@ const S = {
   tasksErr: '',
   showDone: false,
   sbTab: localStorage.getItem(K_SBTAB) === 'tasks' ? 'tasks' : 'ev',
+  calColors: jget(K_CALCOL, {}),
+  sets: jget(K_SETS, []),
+  defDur: +(localStorage.getItem(K_DUR) || 60),
+  weekNum: localStorage.getItem(K_WKNUM) === '1',
+  templates: jget(K_TPL, []),
 };
 // 옛 「목록」 보기 값은 데스크톱에서 월 보기로(목록은 L 키로 계속 쓸 수 있다)
 
@@ -81,7 +94,12 @@ $('#appName').textContent = CONFIG.appName;
 const calById = (id) => S.cals.find((c) => c.id === id);
 const colorOf = (e) => e.color || calById(e.calendarId)?.color || '#888';
 const writableCals = () => S.cals.filter((c) => !c.readOnly);
-const defaultCal = () => writableCals().find((c) => c.primary) || writableCals()[0];
+const defaultCal = () => writableCals().find((c) => c.id === localStorage.getItem(K_DEFCAL))
+  || writableCals().find((c) => c.primary) || writableCals()[0];
+/** 캘린더 목록을 받으면 이 기기에서 바꾼 색을 입힌다(구글 쪽 색은 그대로) */
+function paintCals() {
+  S.cals.forEach((c) => { c.origColor ??= c.color; c.color = S.calColors[c.id] || c.origColor; });
+}
 const isHoliday = (e) => e.calendarId === 'holiday' || /holiday/.test(e.calendarId);
 
 /** 휴대폰에서는 월 보기를 위 날짜 줄(펼친 달력)이 대신하므로 목록으로 보여 준다 */
@@ -169,7 +187,7 @@ async function ensureEvents(force = false) {
   const f = addMonths(startOfMonth(from), -1);
   const t = addMonths(startOfMonth(to), 2);
   try {
-    if (!S.cals.length) S.cals = await S.store.calendars();
+    if (!S.cals.length) { S.cals = await S.store.calendars(); paintCals(); }
     S.events = await S.store.events(S.cals, f, t);
     S.loaded = { from: f, to: t, at: Date.now() };
     hideBanner();
@@ -566,10 +584,14 @@ function mEventsHTML(evs, d, now, tasks = []) {
     const past = e.end < now ? ' past' : '';
     html += `<button class="ag-ev m-ev${past}" data-id="${esc(e.id)}" style="--c:${colorOf(e)}"${tipAttr(evTip(e))}>
       <i class="m-dot"></i><span class="m-time">${mTimeRange(e, d)}</span>
-      <span class="ag-title">${esc(e.title)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}
+      <span class="ag-title">${esc(e.title)}${badges(e)}</span>${e.location ? `<span class="ag-loc">${esc(e.location)}</span>` : ''}
     </button>`;
   }
   return html;
+}
+/** 제목 뒤 작은 표시: 반복(↻), 참석자(👥), 화상회의 「참가」 */
+function badges(e) {
+  return `${e.recurring ? '<span class="bdg" title="반복 일정" aria-label="반복">↻</span>' : ''}${e.attendees?.length ? `<span class="bdg" title="참석자 ${e.attendees.length}명" aria-label="참석자">👥</span>` : ''}${e.meet ? `<span class="bdg join" role="link" data-join="${esc(e.meet)}" aria-label="화상회의 참가">참가</span>` : ''}`;
 }
 const mDayLabel = (d, today) => {
   const p = P(d);
@@ -689,6 +711,7 @@ function renderCals() {
       <span class="cal-check"></span>
       <span class="cal-name"${tipAttr(c.name)}>${esc(c.name)}</span>
       ${c.readOnly ? '<span class="cal-ro">읽기 전용</span>' : ''}
+      <button type="button" class="cal-color" data-calcolor="${esc(c.id)}" aria-label="${esc(c.name)} 색 바꾸기" title="색 바꾸기(이 기기)"></button>
     </label>`).join('')
     // 할 일(Google Tasks)도 날짜별 목록에서 켜고 끌 수 있게
     + (S.tasksState === 'ok' ? `<label class="cal-item tasks-item" style="--c:${taskColor()}">
@@ -703,6 +726,19 @@ function renderCals() {
   all.checked = on === S.cals.length;
   all.indeterminate = on > 0 && on < S.cals.length;
   $('#weekStartSel').value = String(S.weekStart);
+  // 새 일정 기본값·주 번호·캘린더 묶음
+  const dc = $('#defCalSel');
+  const dcHTML = writableCals().map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  if (dc.dataset.sig !== dcHTML) { dc.innerHTML = dcHTML; dc.dataset.sig = dcHTML; }
+  dc.value = defaultCal()?.id || '';
+  $('#defDurSel').value = String(S.defDur);
+  $('#weekNumChk').checked = S.weekNum;
+  const cur = [...S.cals.map((c) => c.id).filter((id) => S.hidden.has(id))].sort().join('|');
+  const hit = S.sets.findIndex((x) => [...x.hidden].sort().join('|') === cur);
+  $('#setSel').innerHTML = `<option value="">${S.sets.length ? (hit < 0 ? '(지금 상태)' : '') : '저장한 묶음 없음'}</option>`
+    + S.sets.map((x, i) => `<option value="${i}">${esc(x.name)}</option>`).join('');
+  $('#setSel').value = hit < 0 ? '' : String(hit);
+  $('#setDel').hidden = hit < 0;
   const ub = $('#unhideBtn');
   ub.hidden = !S.hiddenEv.size;
   ub.textContent = `숨긴 일정 ${S.hiddenEv.size}개 다시 보이기`;
@@ -809,6 +845,7 @@ function timeGridHTML(days) {
         <span class="t">${esc(ev.title)}</span>
         ${short ? `<span class="tm">${fmtTime(ev.start)}</span>` : `<span class="tm">${fmtTime(ev.start)} – ${fmtTime(ev.end)}</span>`}
         ${!short && ev.location && h > 54 ? `<span class="loc">${esc(ev.location)}</span>` : ''}
+        ${ev.readOnly ? '' : '<span class="rz" aria-hidden="true"></span>'}
       </button>`;
     }).join('');
     const nowLine = d === today
@@ -949,12 +986,19 @@ function monthHTML() {
       const num = p.d === 1 ? `<span class="mv-date mv-pill">${p.m + 1}월 ${p.d}</span>` : `<span class="mv-date">${p.d}</span>`;
       cells += `<div class="${cls}" data-day="${dayKey(d)}"${extra[i] ? ` data-extra="${extra[i]}"` : ''}><span class="mv-dl">${mvWx(d)}${num}</span>${lanes ? `<span class="mv-sp" style="height:${lanes * BAR_H}px"></span>` : ''}${shown}</div>`;
     }
-    rows += `<div class="mv-week" data-date="${dayKey(w)}">${cells}${bars}</div>`;
+    rows += `<div class="mv-week" data-date="${dayKey(w)}">${cells}${bars}${S.weekNum ? `<span class="mv-wk" title="ISO 주 번호">${isoWeek(w + 3 * DAY)}주</span>` : ''}</div>`;
   }
   return `<div class="mv" style="--wh:${rowH}px">
     <div class="mv-head">${wdOrder().map((i) => `<span class="${i === 0 || i === 6 ? 'wkend' : ''}">${WD[i]}</span>`).join('')}</div>
     <div class="mv-scroll">${rows}</div>
   </div>`;
+}
+/** ISO 주 번호(월요일 시작, 목요일이 든 해 기준) */
+function isoWeek(ts) {
+  const d = startOfDay(ts);
+  const thu = d + (3 - ((P(d).dow + 6) % 7)) * DAY;
+  const y0 = T(P(thu).y, 0, 1);
+  return Math.floor((thu - y0) / WEEK) + 1;
 }
 /** 월 칸 왼쪽 위 작은 날씨(예보가 있는 날만) */
 function mvWx(d) {
@@ -1111,13 +1155,33 @@ function showBanner(html) { const b = $('#banner'); b.innerHTML = html; b.hidden
 function hideBanner() { $('#banner').hidden = true; }
 
 let toastTimer;
+/** 알림 띠. action(실행 취소·되돌리기)이 있으면 실행 취소 목록에도 넣는다(⌘Z / Ctrl+Z 로도 된다) */
 function toast(msg, action) {
   const t = $('#toast');
   t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button class="btn small">${esc(action.label)}</button>` : ''}`;
   t.hidden = false;
-  if (action) t.querySelector('button').onclick = () => { t.hidden = true; action.run(); };
+  if (action) {
+    const u = pushUndo(msg, action.run);
+    t.querySelector('button').onclick = () => { t.hidden = true; runUndo(u); };
+  }
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, 5000);
+}
+
+/* ---------- 실행 취소: 최근 작업 20개까지 ---------- */
+const undoStack = [];
+function pushUndo(label, run) {
+  const u = { label, run };
+  undoStack.push(u);
+  if (undoStack.length > 20) undoStack.shift();
+  return u;
+}
+async function runUndo(u = undoStack[undoStack.length - 1]) {
+  if (!u) { toast('실행 취소할 작업이 없습니다'); return; }
+  const i = undoStack.indexOf(u);
+  if (i >= 0) undoStack.splice(i, 1);
+  await u.run();
+  $('#toast').hidden = true;
 }
 
 /* ---------- 일정 저장 ---------- */
@@ -1162,7 +1226,7 @@ function matchCal(hint) {
 }
 
 /** 날짜 말이 없는 빠른 입력이 들어갈 날: 고른 날(없으면 오늘) */
-const parseQ = (v) => parseQuick(v, Date.now(), { baseDay: S.selDay });
+const parseQ = (v) => parseQuick(v, Date.now(), { baseDay: S.selDay, defaultDur: S.defDur });
 
 function describe(r) {
   const row = (cls, label, html) => `<span class="pv-row ${cls}"><em>${label}</em>${html}</span>`;
@@ -1178,8 +1242,18 @@ function describe(r) {
   } else {
     parts.push(row('pv-time', '시간', `${fmtTime(r.start)} – ${fmtTime(r.end)}${sameDay(r.start, r.end - 1) ? '' : ' (다음 날)'}`));
   }
+  if (r.repeatText) parts.push(row('pv-rep', '반복', `↻ ${esc(r.repeatText)}`));
+  if (r.reminders) parts.push(row('pv-al', '알림', r.reminders === 'none' ? '없음' : esc(r.reminders.map(alertLabel).join(', '))));
   if (r.location) parts.push(row('pv-loc', '장소', `📍 ${esc(r.location)}`));
-  const cal = matchCal(r.calendarHint);
+  if (r.url) parts.push(row('pv-url', 'URL', esc(r.url)));
+  if (r.attendees.length) parts.push(row('pv-att', '참석자', esc(r.attendees.join(', '))));
+  if (r.note) parts.push(row('pv-note', '메모', esc(r.note)));
+  if (quickTpl) parts.push(row('pv-tpl', '템플릿', esc(quickTpl.title)));
+  if (r.isTask) {
+    return `<strong style="--c:${taskColor()}">☐ ${esc(r.title || '새 할 일')}</strong>${row('pv-task', '할 일', r.hasDate ? `마감 ${esc(fmtDate(r.start))}` : '마감일 없음')}<kbd>Enter</kbd>`;
+  }
+  const tc = !r.calendarHint && quickTpl ? calById(quickTpl.calendarId) : null;
+  const cal = tc && !tc.readOnly ? tc : matchCal(r.calendarHint);
   if (cal) parts.push(row('pv-cal', '캘린더', `<span style="--c:${cal.color}"><i></i>${esc(cal.name)}</span>`));
   return `<strong style="--c:${cal?.color || 'var(--accent)'}">${esc(r.title || '새 일정')}</strong>${parts.join('')}<kbd>Enter</kbd>`;
 }
@@ -1200,9 +1274,12 @@ quick.addEventListener('blur', () => setTimeout(() => { if (!document.body.class
 quick.addEventListener('focus', () => quick.dispatchEvent(new Event('input')));
 
 /** 빠른 입력 열기: 휴대폰은 아래에서 올라오는 시트, 데스크톱은 왼쪽 위 ＋ 아래 작은 창 */
+let quickTpl = null; // 빠른 입력에서 고른 템플릿
 function openQuick(text = '') {
   if (S.needsLogin) return;
   if (text) quick.value = text;
+  quickTpl = null;
+  renderTemplates();
   closeCtx();
   document.body.classList.add('quick-open');
   if (mq.matches) fitSheetToKeyboard();
@@ -1211,6 +1288,7 @@ function openQuick(text = '') {
 }
 function closeQuick() {
   quick.value = '';
+  quickTpl = null;
   pvEl.hidden = true;
   document.body.classList.remove('quick-open');
   $('#quickSheet').style.removeProperty('--kb');
@@ -1227,16 +1305,41 @@ window.visualViewport?.addEventListener('resize', () => { if (document.body.clas
 $('#qsCancel').onclick = closeQuick;
 $('#qsScrim').onclick = () => { closeQuick(); closeMenu(); };
 
+/** 알림 분 → 「10분 전」「1시간 전」「1일 전」 */
+function alertLabel(v) {
+  if (v === 0) return '일정 시작';
+  if (v >= 10080 && v % 10080 === 0) return `${v / 10080}주 전`;
+  if (v >= 1440 && v % 1440 === 0) return `${v / 1440}일 전`;
+  if (v >= 60 && v % 60 === 0) return `${v / 60}시간 전`;
+  return `${v}분 전`;
+}
+/** 자연어 알림 → 저장 값(하나면 분, 여럿이면 배열) */
+const reminderFromParse = (x) => (x == null ? undefined : x === 'none' ? 'none' : x.length === 1 ? x[0] : x);
+
 $('#quickForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const v = quick.value.trim();
   if (!v || S.needsLogin) return;
   const r = parseQ(v);
-  const cal = matchCal(r.calendarHint);
+  // 「할 일: …」「todo …」 → 구글 할 일(권한이 없으면 일정으로 넣지 않고 안내만)
+  if (r.isTask) {
+    if (S.tasksState !== 'ok') { toast('할 일(Google Tasks)을 쓸 수 없는 상태입니다 · ☰ → 할 일에서 확인'); return; }
+    const listId = localStorage.getItem(K_TLIST) && S.taskLists.some((l) => l.id === localStorage.getItem(K_TLIST)) ? localStorage.getItem(K_TLIST) : S.taskLists[0]?.id;
+    if (await addTask(v.replace(/^\s*(?:할\s?일|todo|task|투두|리마인더)\s*[:：]?\s*/i, ''), listId)) { closeQuick(); closeMenu(); }
+    return;
+  }
+  const tpl = quickTpl;
+  const cal = (r.calendarHint ? matchCal(r.calendarHint) : tpl && calById(tpl.calendarId) && !calById(tpl.calendarId).readOnly ? calById(tpl.calendarId) : null) || matchCal(r.calendarHint);
   if (!cal) { toast('일정을 넣을 수 있는 캘린더가 없습니다'); return; }
+  // 템플릿을 골랐으면 문장에 없는 값(길이·장소·메모·알림·URL)을 템플릿에서
+  const end = tpl && r.hasTime && !r.allDay && r.end - r.start === S.defDur * 60e3 ? r.start + tpl.dur * 60e3 : r.end;
   const saved = await guarded(() => createEvent({
-    calendarId: cal.id, title: r.title || '새 일정', start: r.start, end: r.end,
-    allDay: r.allDay, location: r.location, note: '',
+    calendarId: cal.id, title: r.title || tpl?.title || '새 일정', start: r.start, end,
+    allDay: r.allDay, location: r.location || tpl?.location || '', note: r.note || tpl?.note || '',
+    ...(r.recurrence ? { recurrence: r.recurrence } : {}),
+    ...(reminderFromParse(r.reminders) !== undefined ? { reminder: reminderFromParse(r.reminders) } : tpl?.reminder != null ? { reminder: tpl.reminder } : {}),
+    ...(r.url || tpl?.url ? { url: r.url || tpl.url } : {}),
+    ...(r.attendees.length ? { attendees: r.attendees.map((email) => ({ email, status: 'needsAction' })), attendeesChanged: true } : {}),
   }));
   if (!saved) return;
   closeQuick();
@@ -1244,11 +1347,12 @@ $('#quickForm').addEventListener('submit', async (ev) => {
   S.cursor = startOfDay(saved.start);
   S.miniMonth = startOfMonth(S.cursor);
   S.jump = true;
-  await render();
+  if (r.recurrence) searchPool = null;
+  await render({ refetch: !!r.recurrence });
   flash(saved.id);
   toast(`‘${saved.title}’ 추가 · ${fmtDate(saved.start)}${saved.allDay ? '' : ` ${fmtTime(saved.start)}`}`, {
     label: '실행 취소',
-    run: async () => { await guarded(() => removeEvent(saved)); render(); },
+    run: async () => { await guarded(() => removeEvent(saved)); searchPool = null; render({ refetch: !!r.recurrence }); },
   });
 });
 
@@ -1266,50 +1370,257 @@ const form = $('#editorForm');
 let editing = null; // {event, isNew}
 
 function openEditor(e, isNew = false) {
-  editing = { event: e, isNew, reminder: String(e.reminder ?? 'default'), parsed: null, whenTouched: false };
+  editing = { event: e, isNew, reminder: String(e.reminder ?? 'default'), parsed: null, whenTouched: false,
+    rule: null, ruleLoaded: !e.recurringEventId, ruleRaw: '', repTouched: false, master: null,
+    attendees: (e.attendees || []).map((a) => ({ ...a })), attTouched: false, tz: e.tz || TZ_SEOUL, tzShown: e.tz || TZ_SEOUL };
   const ro = !!e.readOnly;
   const cals = ro ? S.cals.filter((c) => c.id === e.calendarId) : writableCals();
   form.calendarId.innerHTML = cals.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
   form.calendarId.value = e.calendarId;
   form.title.value = isNew ? '' : e.title;
-  form.title.placeholder = isNew ? '제목 (예: 회의 14:00, 내일 오후 3시 면담)' : '제목';
+  form.title.placeholder = isNew ? '제목 (예: 회의 14:00, 매주 월수금 9시 스탠드업)' : '제목';
   $('#edParse').hidden = true;
   form.allDay.checked = e.allDay;
-  form.sDate.value = dayKey(e.start);
-  form.sTime.value = hm(e.start);
-  form.eDate.value = dayKey(e.allDay ? e.end - DAY : e.end);
-  form.eTime.value = hm(e.end);
+  form.tz.innerHTML = tzOptions(editing.tz);
+  form.tz.value = editing.tz;
+  showWhen(e.start, e.end, e.allDay);
   form.location.value = e.location || '';
+  form.url.value = e.url || '';
   form.note.value = e.note || '';
+  form.avail.value = e.free ? 'free' : 'busy';
+  form.attIn.value = '';
+  form.notify.checked = false;
+  form.addMeet.checked = false;
   setReminderField(e.reminder);
-  [...form.elements].forEach((el) => { if (el.name) el.disabled = ro; });
+  // 반복: 원본이 있으면(반복 회차) 원본 규칙을 읽어 와서 보여 준다
+  const rec = e.recurrence || null;
+  if (rec) { editing.rule = ruleOf(rec); editing.ruleRaw = rec.join('\n'); }
+  setRepeatFields(editing.rule, e.start);
+  if (e.recurringEventId) {
+    form.repeat.disabled = true;
+    const ed = editing;
+    S.store.get(e.calendarId, e.recurringEventId, calById(e.calendarId)).then((m) => {
+      if (editing !== ed || !m) return;
+      ed.master = m;
+      ed.rule = ruleOf(m.recurrence);
+      ed.ruleRaw = (m.recurrence || []).join('\n');
+      ed.ruleLoaded = true;
+      setRepeatFields(ed.rule, e.start);
+      form.repeat.disabled = ro;
+    }).catch(() => { if (editing === ed) form.repeat.disabled = true; });
+  }
+  [...form.elements].forEach((el) => { if (el.name && el.name !== 'repeat') el.disabled = ro; });
+  if (ro) form.repeat.disabled = true;
+  // 반복 회차는 다른 캘린더로 옮길 수 없다(구글 제한)
+  if (e.recurringEventId) form.calendarId.disabled = true;
+  $('#edAlAdd').hidden = ro;
   $('#edSave').hidden = ro;
   $('#edDelete').hidden = isNew || ro;
   $('#edCancel').textContent = ro ? '닫기' : '취소';
   const note = $('#edNote');
-  note.hidden = !(ro || e.recurring);
-  note.textContent = ro ? '읽기 전용 캘린더의 일정입니다.' : '반복 일정입니다. 이 날짜의 일정만 바뀝니다.';
+  note.hidden = !(ro || e.recurringEventId);
+  note.textContent = ro ? '읽기 전용 캘린더의 일정입니다.' : '반복 일정입니다. 저장·삭제할 때 「이 일정만」 또는 「이후 모든 일정」을 고릅니다.';
   const link = $('#edLink');
   link.hidden = !e.link;
   if (e.link) link.href = e.link;
+  $('#edMeet').hidden = !e.meet;
+  if (e.meet) $('#edMeet').href = e.meet;
+  $('#edMeetRow').hidden = !!e.meet || ro;
+  syncUrlLink();
+  renderAttendees();
   syncEditor();
   dlg.showModal();
   edOpenedAt = Date.now();
   if (isNew) form.title.focus();
 }
 
-/** 알림 고르기: 목록에 없는 값(20분 전·여러 알림)은 그 일정에만 보기 하나를 더 붙인다 */
+/* ---------- 편집 창: 시간대 ---------- */
+const TZ_SEOUL = 'Asia/Seoul';
+const TZS = [['Asia/Seoul', '서울'], ['Asia/Tokyo', '도쿄'], ['Asia/Shanghai', '베이징'], ['Asia/Singapore', '싱가포르'],
+  ['Asia/Dubai', '두바이'], ['Europe/London', '런던'], ['Europe/Paris', '파리·베를린'], ['America/New_York', '뉴욕'],
+  ['America/Chicago', '시카고'], ['America/Los_Angeles', '로스앤젤레스'], ['Pacific/Honolulu', '호놀룰루'], ['UTC', 'UTC']];
+const tzName = (tz) => TZS.find(([k]) => k === tz)?.[1] || tz;
+function tzOptions(cur) {
+  const list = TZS.some(([k]) => k === cur) ? TZS : [...TZS, [cur, cur]];
+  return list.map(([k, l]) => `<option value="${esc(k)}">${esc(l)}${k === TZ_SEOUL ? '' : ` (${esc(k)})`}</option>`).join('');
+}
+/** 그 시각의 그 시간대 벽시계 값 {y, m(1~12), d, h, mi} */
+function wallIn(ts, tz) {
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const o = Object.fromEntries(f.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+  return { y: +o.year, m: +o.month, d: +o.day, h: +o.hour % 24, mi: +o.minute };
+}
+const pad2 = (n) => String(n).padStart(2, '0');
+/** 그 시간대의 날짜·시각 입력값 → 타임스탬프 */
+function fromWall(dateStr, timeStr, tz) {
+  if (tz === TZ_SEOUL) return fromInputs(dateStr, timeStr);
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const [h, mi] = (timeStr || '00:00').split(':').map(Number);
+  const guess = Date.UTC(y, m - 1, d, h, mi);
+  const off = (ts) => { const w = wallIn(ts, tz); return Date.UTC(w.y, w.m - 1, w.d, w.h, w.mi) - ts; };
+  let ts = guess - off(guess);
+  ts = guess - off(ts); // 서머타임 경계 보정
+  return ts;
+}
+/** 시작·종료를 편집 창 칸에 넣는다(시간 일정은 고른 시간대의 벽시계로) */
+function showWhen(start, end, allDay) {
+  const tz = allDay ? TZ_SEOUL : form.tz.value || TZ_SEOUL;
+  const w = (ts) => (tz === TZ_SEOUL ? { date: dayKey(ts), time: hm(ts) } : (() => { const x = wallIn(ts, tz); return { date: `${x.y}-${pad2(x.m)}-${pad2(x.d)}`, time: `${pad2(x.h)}:${pad2(x.mi)}` }; })());
+  const a = w(start);
+  const b = w(allDay ? end - DAY : end);
+  form.sDate.value = a.date;
+  form.sTime.value = a.time;
+  form.eDate.value = allDay ? dayKey(end - DAY) : b.date;
+  form.eTime.value = allDay ? hm(end) : w(end).time;
+}
+/** 편집 창 칸 → {start, end} (tz: 칸에 보이는 시간대) */
+function readWhen(tz = form.tz.value || TZ_SEOUL) {
+  const allDay = form.allDay.checked;
+  if (allDay) return { allDay, start: fromDayKey(form.sDate.value), end: fromDayKey(form.eDate.value) + DAY };
+  return { allDay, start: fromWall(form.sDate.value, form.sTime.value, tz), end: fromWall(form.eDate.value, form.eTime.value, tz) };
+}
+function syncTzText() {
+  const el = $('#edTzText');
+  const tz = form.tz.value;
+  const show = !form.allDay.checked && tz && tz !== TZ_SEOUL && form.sDate.value && form.sTime.value;
+  el.hidden = !show;
+  if (show) { const { start, end } = readWhen(); el.textContent = `서울 시간: ${fmtDate(start)} ${fmtTime(start)} – ${fmtTime(end)}`; }
+}
+form.tz.addEventListener('change', () => {
+  // 시간대를 바꾸면 같은 순간을 새 시간대 벽시계로 다시 보여 준다
+  if (!editing) return;
+  const w = readWhen(editing.tzShown);
+  showWhen(w.start, w.end, w.allDay);
+  editing.tzShown = form.tz.value;
+  syncTzText();
+});
+
+/* ---------- 편집 창: 반복 ---------- */
+function setRepeatFields(rule, start) {
+  const kind = presetOf(rule, start);
+  const custom = kind === 'custom' ? `<option value="custom">${esc(describeRule({ ...rule, until: null, count: null }, start))}</option>` : '';
+  form.repeat.innerHTML = REPEAT_OPTIONS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('') + custom;
+  form.repeat.value = kind;
+  editing.customRule = kind === 'custom' ? rule : null;
+  form.repeatEnd.value = rule?.count ? 'count' : rule?.until != null ? 'until' : 'never';
+  form.repeatUntil.value = dayKey(rule?.until != null ? rule.until : start + 30 * DAY);
+  form.repeatCount.value = String(rule?.count || 10);
+  syncRepeat();
+}
+/** 편집 창 칸 → 반복 규칙(없으면 null) */
+function readRule(start) {
+  const kind = form.repeat.value;
+  let r = kind === 'none' ? null : kind === 'custom' ? { ...editing.customRule } : presetRule(kind, start);
+  if (!r) return null;
+  delete r.until; delete r.count;
+  r.until = null; r.count = null;
+  if (form.repeatEnd.value === 'until' && form.repeatUntil.value) r.until = fromDayKey(form.repeatUntil.value) + DAY - 1;
+  if (form.repeatEnd.value === 'count') r.count = Math.max(1, Math.min(730, +form.repeatCount.value || 1));
+  return r;
+}
+function syncRepeat() {
+  const on = form.repeat.value !== 'none';
+  $('#edRepEnd').hidden = !on;
+  form.repeatUntil.hidden = form.repeatEnd.value !== 'until';
+  form.repeatCount.hidden = form.repeatEnd.value !== 'count';
+  const t = $('#edRepText');
+  t.hidden = !on;
+  if (on && form.sDate.value) { const { start } = readWhen(); const r = readRule(start); t.textContent = `↻ ${describeRule(r, start)}`; }
+}
+['repeat', 'repeatEnd', 'repeatUntil', 'repeatCount'].forEach((n) => form[n].addEventListener('change', () => { if (editing) editing.repTouched = true; syncRepeat(); }));
+form.repeatCount.addEventListener('input', syncRepeat);
+
+/* ---------- 편집 창: 알림 여러 개(구글은 다섯 개까지) ---------- */
+const alertSels = () => [...$('#edAlerts').querySelectorAll('.al-sel')];
+function addAlertSel(v) {
+  const first = form.reminder;
+  const sel = first.cloneNode(true);
+  sel.removeAttribute('name');
+  sel.querySelectorAll('[data-extra], [value=none], [value=default]').forEach((o) => o.remove());
+  ensureOpt(sel, v);
+  sel.value = String(v);
+  sel.setAttribute('aria-label', '알림 더');
+  const wrap = document.createElement('span');
+  wrap.className = 'al-more';
+  wrap.append(sel);
+  wrap.insertAdjacentHTML('beforeend', '<button type="button" class="al-del" aria-label="이 알림 빼기">×</button>');
+  $('#edAlAdd').before(wrap);
+  syncAlerts();
+}
+function ensureOpt(sel, v) {
+  const val = String(v);
+  if (![...sel.options].some((o) => o.value === val)) {
+    const label = v === 'custom' ? '구글에 설정된 알림 그대로' : alertLabel(+v);
+    sel.insertAdjacentHTML('beforeend', `<option value="${esc(val)}" data-extra>${esc(label)}</option>`);
+  }
+}
+function syncAlerts() {
+  const n = alertSels().length;
+  const v = form.reminder.value;
+  $('#edAlAdd').hidden = n >= 5 || ['none', 'default', 'custom'].includes(v) || !!form.reminder.disabled;
+}
+/** 지금 고른 알림 값: 'default' | 'none' | 'custom' | 분 | [분…] */
+function readAlerts() {
+  const v = form.reminder.value;
+  if (['none', 'default', 'custom'].includes(v)) return v;
+  const mins = [...new Set(alertSels().map((x) => +x.value))].sort((a, b) => a - b);
+  return mins.length === 1 ? mins[0] : mins;
+}
+$('#edAlAdd').addEventListener('click', () => {
+  const used = new Set(alertSels().map((x) => +x.value));
+  addAlertSel([10, 60, 1440, 30, 5, 15, 120, 2880].find((m) => !used.has(m)) ?? 10);
+});
+$('#edAlerts').addEventListener('click', (ev) => { const d = ev.target.closest('.al-del'); if (d) { d.parentElement.remove(); syncAlerts(); } });
+$('#edAlerts').addEventListener('change', syncAlerts);
+
+/* ---------- 편집 창: 참석자·URL ---------- */
+const RSVP = { accepted: ['✓', '수락'], declined: ['✕', '거절'], tentative: ['?', '미정'], needsAction: ['·', '응답 없음'] };
+function renderAttendees() {
+  const box = $('#edAtt');
+  const ro = !!editing.event.readOnly;
+  box.innerHTML = editing.attendees.map((a, i) => {
+    const [ic, label] = RSVP[a.status] || RSVP.needsAction;
+    return `<span class="att att-${esc(a.status || 'needsAction')}" title="${esc(a.email)} · ${label}${a.organizer ? ' · 주최자' : ''}"><b>${ic}</b>${esc(a.name || a.email)}${a.organizer ? ' <small>주최</small>' : ''}${ro || a.organizer ? '' : `<button type="button" class="att-del" data-att="${i}" aria-label="${esc(a.email)} 빼기">×</button>`}</span>`;
+  }).join('');
+  $('#edNotifyRow').hidden = ro || !(editing.attendees.some((a) => !a.self) && (editing.attTouched || editing.isNew));
+}
+function addAttendee() {
+  const v = form.attIn.value.trim();
+  if (!v) return;
+  const list = v.split(/[\s,;]+/).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  if (!list.length) { toast('이메일 주소를 확인해 주세요'); return; }
+  for (const email of list) if (!editing.attendees.some((a) => a.email.toLowerCase() === email.toLowerCase())) editing.attendees.push({ email, status: 'needsAction' });
+  editing.attTouched = true;
+  form.attIn.value = '';
+  renderAttendees();
+}
+form.attIn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); addAttendee(); } });
+form.attIn.addEventListener('change', addAttendee);
+$('#edAtt').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-att]');
+  if (!b) return;
+  editing.attendees.splice(+b.dataset.att, 1);
+  editing.attTouched = true;
+  renderAttendees();
+});
+function syncUrlLink() {
+  const u = form.url.value.trim();
+  const ok = /^https?:\/\//i.test(u);
+  $('#edUrl').hidden = !ok;
+  if (ok) $('#edUrl').href = u;
+}
+form.url.addEventListener('input', syncUrlLink);
+
+/** 알림 고르기: 목록에 없는 값(20분 전 등)은 그 일정에만 보기 하나를 더 붙인다. 여러 개면 칸을 늘린다 */
 function setReminderField(v = 'default') {
   const sel = form.reminder;
   sel.querySelectorAll('[data-extra]').forEach((o) => o.remove());
-  const val = String(v);
-  if (![...sel.options].some((o) => o.value === val)) {
-    const label = v === 'custom' ? '구글에 설정된 알림 그대로'
-      : v >= 1440 && v % 1440 === 0 ? `${v / 1440}일 전`
-        : v >= 60 && v % 60 === 0 ? `${v / 60}시간 전` : `${v}분 전`;
-    sel.insertAdjacentHTML('beforeend', `<option value="${esc(val)}" data-extra>${esc(label)}</option>`);
-  }
-  sel.value = val;
+  $('#edAlerts').querySelectorAll('.al-more').forEach((x) => x.remove());
+  const list = Array.isArray(v) ? v : [v];
+  ensureOpt(sel, list[0]);
+  sel.value = String(list[0]);
+  list.slice(1).forEach((m) => addAlertSel(m));
+  syncAlerts();
 }
 const reminderOf = (v) => (/^\d+$/.test(v) ? +v : v);
 
@@ -1325,33 +1636,46 @@ function applyTitleWhen() {
   const r = text.trim() ? parseQuick(text, Date.now(), { baseDay: startOfDay(b.start) }) : null;
   // 「점심」「저녁」처럼 끼니 말로 짐작한 시간은 쓰지 않는다(고른 칸 시간을 지킨다)
   const hasTime = !!r && r.hasTime && !r.timeGuessed;
-  const hit = !!r && (hasTime || r.hasDate);
+  const hit = !!r && (hasTime || r.hasDate || !!r.recurrence || !!r.reminders || !!r.url || r.attendees.length > 0 || !!r.note);
   editing.parsed = hit ? r : null;
   const note = $('#edParse');
   note.hidden = !hit;
   if (hit) {
-    const when = hasTime ? `${fmtDate(r.start)} ${fmtTime(r.start)} – ${fmtTime(r.end)}` : fmtDate(r.start);
-    note.textContent = `⏱ ${when} · 제목: ${r.title || '새 일정'}`;
+    const when = hasTime ? `${fmtDate(r.start)} ${fmtTime(r.start)} – ${fmtTime(r.end)}` : r.hasDate ? fmtDate(r.start) : '';
+    note.textContent = [when && `⏱ ${when}`, r.repeatText && `↻ ${r.repeatText}`, Array.isArray(r.reminders) && `🔔 ${r.reminders.map(alertLabel).join(', ')}`, `제목: ${r.title || '새 일정'}`].filter(Boolean).join(' · ');
   }
   if (editing.whenTouched) return;
   let { start, end, allDay } = b;
   if (hasTime) {
     ({ start, end } = r);
     allDay = false;
-  } else if (hit) {
+  } else if (hit && r.hasDate) {
     // 날짜만 적었으면 고른 시각·길이는 그대로 두고 날짜만 옮긴다
     start = r.start + (b.start - startOfDay(b.start));
     end = start + (b.end - b.start);
     if (/종일/.test(text)) { allDay = true; end = r.end; start = r.start; }
   }
   form.allDay.checked = allDay;
-  form.sDate.value = dayKey(start);
-  form.sTime.value = hm(start);
-  form.eDate.value = dayKey(allDay ? end - DAY : end);
-  form.eTime.value = hm(end);
+  showWhen(start, end, allDay);
   syncEditor();
 }
-form.title.addEventListener('input', applyTitleWhen);
+/** 제목에 적은 반복·알림 말(「매주 월수금」「알림 10분 전」)도 칸에 넣는다(직접 고친 칸은 그대로) */
+function applyTitleExtras(r) {
+  if (!editing.repTouched) {
+    const rule = r?.recurrence ? ruleOf(r.recurrence) : null;
+    setRepeatFields(rule, r?.start ?? editing.event.start);
+  }
+  if (!editing.alTouched && r?.reminders) setReminderField(reminderFromParse(r.reminders));
+}
+form.title.addEventListener('input', () => {
+  applyTitleWhen();
+  if (editing?.isNew) {
+    const text = form.title.value;
+    const r = text.trim() ? parseQuick(text, Date.now(), { baseDay: startOfDay(editing.event.start) }) : null;
+    applyTitleExtras(r);
+  }
+});
+$('#edAlerts').addEventListener('change', () => { if (editing) editing.alTouched = true; });
 ['allDay', 'sDate', 'sTime', 'eDate', 'eTime'].forEach((n) => {
   form[n].addEventListener('input', () => { if (editing) editing.whenTouched = true; });
   form[n].addEventListener('change', () => { if (editing) editing.whenTouched = true; });
@@ -1383,56 +1707,135 @@ dlg.addEventListener('click', (ev) => {
 
 form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
-  const { event: orig, isNew } = editing;
+  const ed = editing;
+  const { event: orig, isNew } = ed;
   if (isNew) applyTitleWhen();
-  const parsed = isNew ? editing.parsed : null;
-  const allDay = form.allDay.checked;
-  let start;
-  let end;
-  if (allDay) {
-    start = fromDayKey(form.sDate.value);
-    end = fromDayKey(form.eDate.value) + DAY;
-  } else {
-    start = fromInputs(form.sDate.value, form.sTime.value);
-    end = fromInputs(form.eDate.value, form.eTime.value);
-  }
-  if (end <= start) { toast('종료가 시작보다 늦어야 합니다'); return; }
+  const parsed = isNew ? ed.parsed : null;
+  const { allDay, start, end } = readWhen();
+  if (!(end > start)) { toast('종료가 시작보다 늦어야 합니다'); return; }
+  const tz = allDay ? TZ_SEOUL : form.tz.value || TZ_SEOUL;
+  const rem = readAlerts();
   const e = {
     ...orig,
     title: (parsed ? parsed.title : form.title.value.trim()) || '새 일정',
     calendarId: form.calendarId.value,
     allDay, start, end,
     location: form.location.value.trim() || parsed?.location || '',
-    note: form.note.value,
+    note: form.note.value || parsed?.note || '',
+    url: form.url.value.trim() || parsed?.url || (orig.url ? '' : undefined),
     // 알림을 안 건드렸으면 원래 값(없으면 보내지 않아 구글 쪽 그대로)
-    reminder: form.reminder.value === editing.reminder ? orig.reminder : reminderOf(form.reminder.value),
+    reminder: String(rem) === ed.reminder ? orig.reminder : rem,
+    // 바쁨/한가함: 바꿨을 때만 보낸다
+    free: (form.avail.value === 'free') !== !!orig.free ? form.avail.value === 'free' : orig.free,
+    tz: tz === TZ_SEOUL ? undefined : tz,
+    ...(form.addMeet.checked && !orig.meet ? { addMeet: true } : {}),
   };
+  if (e.url === undefined) delete e.url;
+  // 참석자: 제목에 적은 이메일도 더한다. 바꿨을 때만 구글에 보낸다
+  if (parsed?.attendees?.length) for (const email of parsed.attendees) if (!ed.attendees.some((a) => a.email === email)) { ed.attendees.push({ email, status: 'needsAction' }); ed.attTouched = true; }
+  if (ed.attTouched) { e.attendees = ed.attendees; e.attendeesChanged = true; e.notify = form.notify.checked; }
+  // 반복
+  const rule = ed.ruleLoaded ? readRule(start) : null;
+  const keepUnknown = form.repeat.value === 'custom' && ed.customRule?.unknown && !ed.repTouched;
+  const newRec = keepUnknown ? ed.ruleRaw.split('\n') : rule ? [buildRRule(rule, allDay)] : null;
+  const recChanged = ed.ruleLoaded && (newRec ? newRec.join('\n') : '') !== ed.ruleRaw;
   $('#edSave').disabled = true;
-  const saved = await guarded(() => (isNew ? createEvent(e) : updateEvent(e, orig.calendarId)));
-  $('#edSave').disabled = false;
-  if (!saved) return;
-  dlg.close();
-  await render();
-  flash(saved.id);
-  toast(isNew ? '일정을 추가했습니다' : '일정을 수정했습니다');
+  try {
+    let saved;
+    let refetch = false;
+    if (isNew) {
+      if (newRec) { e.recurrence = newRec; refetch = true; }
+      saved = await guarded(() => createEvent(e));
+    } else if (orig.recurringEventId) {
+      // 반복 회차: 이 일정만 / 이후 모든 일정
+      const mode = await ask({
+        title: '반복 일정 저장',
+        msg: recChanged ? '반복 규칙을 바꾸면 이 일정부터 이후 모든 일정에 적용됩니다.' : '어느 일정에 저장할까요?',
+        items: recChanged ? [{ label: '이후 모든 일정에 저장', value: 'following' }]
+          : [{ label: '이 일정만 저장', value: 'one' }, { label: '이후 모든 일정에 저장', value: 'following' }],
+      });
+      if (!mode) return;
+      if (mode === 'one') saved = await guarded(() => updateEvent(e, orig.calendarId));
+      else { saved = await saveFollowing(orig, e, newRec); refetch = true; }
+    } else {
+      if (recChanged) { e.recurrence = newRec || []; refetch = true; }
+      saved = await guarded(() => updateEvent(e, orig.calendarId));
+    }
+    if (!saved) return;
+    dlg.close();
+    if (refetch) searchPool = null;
+    await render({ refetch });
+    flash(saved.id);
+    if (isNew) toast('일정을 추가했습니다', { label: '실행 취소', run: async () => { await guarded(() => removeEvent(saved)); searchPool = null; render({ refetch }); } });
+    else if (refetch) toast('일정을 수정했습니다');
+    else toast('일정을 수정했습니다', { label: '실행 취소', run: async () => { const back = await guarded(() => updateEvent({ ...orig, ...(orig.attendees ? { attendeesChanged: !!e.attendeesChanged } : {}) }, saved.calendarId)); if (back) { await render(); flash(back.id); } } });
+  } finally {
+    $('#edSave').disabled = false;
+  }
 });
+
+/** 반복 일정 「이후 모든 일정」 저장. 첫 회차면 원본을 고치고, 아니면 원본을 이 회차 앞에서 끝낸 뒤 새 반복을 만든다 */
+async function saveFollowing(orig, e, newRec) {
+  return guarded(async () => {
+    const m = editing.master || await S.store.get(orig.calendarId, orig.recurringEventId, calById(orig.calendarId));
+    const first = (orig.originalStart ?? orig.start) <= m.start;
+    if (first) {
+      const body = { ...copyOf(e), id: m.id, calendarId: m.calendarId || orig.calendarId };
+      if (e.attendeesChanged) { body.attendees = e.attendees; body.attendeesChanged = true; }
+      if (newRec) return S.store.update({ ...body, recurrence: newRec }, calById(body.calendarId), body.calendarId);
+      // 반복을 끄면: 원본을 지우고 단일 일정으로
+      await S.store.remove({ ...m, calendarId: body.calendarId });
+      return S.store.create(body, calById(body.calendarId));
+    }
+    await S.store.removeFollowing(orig);
+    const body = { ...copyOf(e), ...(newRec ? { recurrence: newRec } : {}) };
+    if (e.attendeesChanged || orig.attendees) { body.attendees = e.attendees || orig.attendees; body.attendeesChanged = true; }
+    return S.store.create(body, calById(body.calendarId));
+  });
+}
 
 /** 삭제(확인 후) + 되돌리기. 편집 창·오른쪽 클릭 메뉴가 같이 쓴다 */
 async function deleteEvent(e) {
-  if (!confirm(`‘${e.title}’ 일정을 삭제할까요?${e.recurring ? '\n(반복 일정 중 이 날짜만 삭제됩니다)' : ''}`)) return false;
-  const ok = await guarded(async () => { await removeEvent(e); return true; });
+  if (e.readOnly) { toast('읽기 전용 캘린더의 일정은 지울 수 없습니다'); return false; }
+  const guests = (e.attendees || []).some((a) => !a.self);
+  // 되돌리기 어려운 동작이라 늘 확인창을 거친다. 반복 일정은 이 일정만 / 이후 모든 일정
+  const mode = await ask({
+    title: '삭제할까요?',
+    msg: `‘${e.title}’ · ${eventText(e, false).split('\n')[1]}${e.recurringEventId ? '\n반복 일정입니다.' : ''}`,
+    items: e.recurringEventId
+      ? [{ label: '이 일정만 삭제', value: 'one', danger: true }, { label: '이후 모든 일정 삭제', value: 'following', danger: true }]
+      : [{ label: '삭제', value: 'one', danger: true }],
+    check: guests ? '참석자에게 취소 메일 보내기' : '',
+  });
+  if (!mode) return false;
+  const notify = guests && askChecked();
+  if (mode === 'following') {
+    const info = await guarded(() => S.store.removeFollowing(e));
+    if (!info) return false;
+    searchPool = null;
+    await render({ refetch: true });
+    toast(info.deletedAll ? '반복 일정을 모두 삭제했습니다' : '이 일정부터 이후 반복을 삭제했습니다', info.masterId ? {
+      label: '되돌리기',
+      run: async () => { await guarded(() => S.store.setRecurrence(e.calendarId, info.masterId, info.prev)); searchPool = null; render({ refetch: true }); },
+    } : null);
+    return true;
+  }
+  const ok = await guarded(async () => { await removeEvent({ ...e, notify }); return true; });
   if (!ok) return false;
   render();
   toast('일정을 삭제했습니다', {
     label: '되돌리기',
-    run: async () => { await guarded(() => createEvent(copyOf(e))); render(); },
+    run: e.recurringEventId
+      ? async () => { await guarded(() => S.store.restoreInstance(e)); searchPool = null; render({ refetch: true }); }
+      : async () => { await guarded(() => createEvent({ ...copyOf(e), ...(e.attendees ? { attendees: e.attendees, attendeesChanged: true } : {}) })); render(); },
   });
   return true;
 }
 /** 새로 만들 때 쓸 사본(구글 쪽 id·링크·반복 표시는 뺀다) */
 function copyOf(e, patch = {}) {
-  const { id, link, recurring, readOnly, ...rest } = e;
-  void id; void link; void recurring; void readOnly;
+  // 반복 회차 표시·화상회의 링크·참석자(복제해도 초대가 나가지 않게)는 빼고 만든다
+  const { id, link, recurring, readOnly, recurringEventId, originalStart, recurrence, exdates, meet, attendees, ...rest } = e;
+  void id; void link; void recurring; void readOnly; void recurringEventId; void originalStart; void recurrence; void exdates; void meet; void attendees;
   return { ...rest, ...patch };
 }
 $('#edDelete').addEventListener('click', async () => {
@@ -1648,13 +2051,13 @@ tform.addEventListener('submit', async (ev) => {
   render();
   toast('할 일을 수정했습니다');
 });
-$('#tfDelete').onclick = async () => {
-  const t = tEditing;
-  if (!confirm(`‘${t.title}’ 할 일을 삭제할까요?`)) return;
+$('#tfDelete').onclick = async () => { if (await deleteTask(tEditing)) tdlg.close(); };
+/** 할 일 삭제(확인 후) + 되돌리기 */
+async function deleteTask(t) {
+  if (await ask({ title: '삭제할까요?', msg: `‘${t.title || '(제목 없음)'}’ 할 일`, items: [{ label: '삭제', value: 'ok', danger: true }] }) !== 'ok') return false;
   const ok = await guardedTask(async () => { await S.tStore.remove(t); return true; });
-  if (!ok) return;
+  if (!ok) return false;
   S.tasks = S.tasks.filter((x) => x.id !== t.id);
-  tdlg.close();
   render();
   toast('할 일을 삭제했습니다', {
     label: '되돌리기',
@@ -1665,7 +2068,8 @@ $('#tfDelete').onclick = async () => {
       if (back) { putTask(back); render(); }
     },
   });
-};
+  return true;
+}
 
 /** 휴대폰: ☰ → 할 일 (어두운 전체 화면) */
 function openTasks() {
@@ -1776,6 +2180,7 @@ function openMenu() {
   closeSearch();
   const v = effView();
   $('#mViewBtn').textContent = v === 'list' ? '3일 보기' : '목록 보기';
+  $('#mDayBtn').textContent = v === 'day' ? '목록 보기' : '일 보기';
   document.body.classList.add('menu-open');
 }
 function closeMenu() { document.body.classList.remove('menu-open'); }
@@ -1981,6 +2386,8 @@ function eventMenu(e) {
     { label: '복사', hint: '날짜를 고른 뒤 ⌘V(Ctrl+V)로 붙여넣습니다',
       act: () => { S.clip = { e, cut: false }; navigator.clipboard?.writeText(eventText(e)).catch(() => {}); toast('복사했습니다 · 날짜를 누르고 ⌘V(Ctrl+V)로 붙여넣기'); } },
     { label: '복제', disabled: !defaultCal(), act: () => duplicateEvent(e) },
+    { label: '다른 날로 옮기기…', disabled: ro, hint: roHint, act: () => moveEventAsk(e) },
+    { label: '템플릿으로 저장', hint: '빠른 입력 창에서 골라 쓰는 일정 틀', act: () => saveTemplate(e) },
     { label: '삭제', disabled: ro, hint: roHint, act: () => deleteEvent(e) },
     { label: '숨기기', hint: '이 기기 화면에서만 감춥니다(구글에는 그대로)', act: () => hideEvent(e) },
     { sep: true },
@@ -2073,6 +2480,7 @@ $('#todayBtn').onclick = goToday;
 $('#mTodayBtn').onclick = () => { closeMenu(); if (S.tickerOpen) S.miniMonth = startOfMonth(Date.now()); goToday(); };
 $('#viewSeg').onclick = (ev) => { const b = ev.target.closest('button'); if (b) setView(b.dataset.view); };
 $('#mViewBtn').onclick = () => { closeMenu(); setView(effView() === 'list' ? 'week' : 'list'); };
+$('#mDayBtn').onclick = () => { closeMenu(); if (effView() === 'day') setView('list'); else { S.selDay = startOfDay(S.cursor); setView('day'); } };
 $('#monthToggle').onclick = () => { if (S.tickerOpen) S.miniMonth = startOfMonth(Date.now()); goToday(); };
 $('#menuBtn').onclick = openMenu;
 $('#menuDone').onclick = closeMenu;
@@ -2106,6 +2514,23 @@ tickerEl.addEventListener('pointerup', (ev) => {
 
 document.addEventListener('click', async (ev) => {
   const t = ev.target;
+  // 끌어 옮긴 뒤·밀기·길게 누름 뒤에 따라오는 클릭은 무시
+  if (Date.now() < dragBlock && t.closest('.tg-ev, .chip, .mv-bar')) return;
+  // 밀어서 연 버튼(더 보기·삭제·완료)
+  const swb = t.closest('[data-sw]');
+  if (swb) {
+    const row = swb.closest('.sw')?.querySelector('.ag-ev, .tsk');
+    if (row) swipeAct(swb.dataset.sw, rowItem(row), row);
+    return;
+  }
+  if (Date.now() < swBlockClick && t.closest(`${SW_ROWS}, .tg`)) return;
+  if (swOpen && t.closest(SW_ROWS) === swOpen.row) { closeSwipe(); return; }
+  // 화상회의 「참가」
+  const join = t.closest('[data-join]');
+  if (join) { window.open(join.dataset.join, '_blank', 'noopener'); return; }
+  // 캘린더 색 바꾸기(이 기기)
+  const cc = t.closest('[data-calcolor]');
+  if (cc) { ev.preventDefault(); pickCalColor(cc.dataset.calcolor); return; }
   // 오른쪽 클릭 메뉴 항목
   const ci = t.closest('#ctx .ctx-i');
   if (ci) {
@@ -2118,8 +2543,9 @@ document.addEventListener('click', async (ev) => {
   // 데스크톱 작은 창(빠른 입력·캘린더 묶음·검색 결과)은 바깥을 누르면 닫는다
   if (!mq.matches) {
     if (t.closest('#plusBtn')) { if (document.body.classList.contains('quick-open')) closeQuick(); else openQuick(); return; }
-    if (document.body.classList.contains('quick-open') && !t.closest('#quickPop')) closeQuick();
-    if (document.body.classList.contains('cals-open') && !t.closest('#calsPanel, .sb-foot')) toggleCalPanel(false);
+    // (누른 단추가 그사이 다시 그려져 문서에서 빠졌으면 바깥 클릭으로 치지 않는다)
+    if (document.body.classList.contains('quick-open') && t.isConnected && !t.closest('#quickPop')) closeQuick();
+    if (document.body.classList.contains('cals-open') && t.isConnected && !t.closest('#calsPanel, .sb-foot')) toggleCalPanel(false);
     if (!t.closest('#dSearchBox')) $('#dSearchPop').hidden = true;
   }
   const act = t.closest('[data-act]')?.dataset.act;
@@ -2245,7 +2671,14 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Escape' && document.body.matches('.menu-open, .search-open')) { closeMenu(); closeSearch(); return; }
-  if (ev.metaKey || ev.ctrlKey || ev.altKey || dlg.open || tdlg.open) return;
+  // ⌘Z / Ctrl+Z: 마지막 작업 실행 취소(입력 칸 밖에서)
+  if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && ev.key.toLowerCase() === 'z' && !dlg.open && !tdlg.open && !askDlg.open
+    && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) {
+    ev.preventDefault();
+    runUndo();
+    return;
+  }
+  if (ev.metaKey || ev.ctrlKey || ev.altKey || dlg.open || tdlg.open || askDlg.open) return;
   if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
   const k = ev.key;
   if (k === 't') goToday();
@@ -2291,6 +2724,406 @@ document.addEventListener('visibilitychange', () => {
 });
 // 아이폰이 앱을 메모리에서 그대로 되살린 경우(bfcache)
 addEventListener('pageshow', (ev) => { if (ev.persisted && backToTodayIfStale() && !S.needsLogin) render(); });
+
+/* ---------- 확인·선택 시트 (삭제할까요? · 이 일정만/이후 모두 · 길게 누름 메뉴) ---------- */
+
+const askDlg = $('#ask');
+let askDone = null;
+/** items: [{label, value, danger, dot}]. 고른 value(취소·바깥 누름은 null)로 끝나는 약속을 돌려준다.
+ *  input: 시트 안에 넣을 입력 칸 HTML, check: 아래 체크 상자 글(있으면) */
+function ask({ title = '', msg = '', items = [], cancel = '취소', input = '', check = '' }) {
+  if (askDone) closeAsk(null);
+  return new Promise((resolve) => {
+    askDone = resolve;
+    askDlg.innerHTML = `<div class="ask-box" role="document">
+      ${title || msg || input ? `<div class="ask-head">${title ? `<strong id="askTitle">${esc(title)}</strong>` : ''}${msg ? `<p>${esc(msg).replace(/\n/g, '<br>')}</p>` : ''}${input ? `<div class="ask-in">${input}</div>` : ''}${check ? `<label class="ask-ck"><input type="checkbox" id="askCk"> ${esc(check)}</label>` : ''}</div>` : ''}
+      <div class="ask-items">${items.map((it, i) => `<button type="button" class="ask-i${it.danger ? ' danger' : ''}${i === 0 ? ' ask-go' : ''}" data-v="${esc(it.value)}"${it.dot ? ` style="--c:${it.dot}"` : ''}>${it.dot ? '<i></i>' : ''}${esc(it.label)}</button>`).join('')}</div>
+      <button type="button" class="ask-i ask-cancel" data-v="">${esc(cancel)}</button></div>`;
+    askDlg.showModal();
+    askDlg.querySelector('.ask-in input')?.focus();
+  });
+}
+const askChecked = () => !!askDlg.querySelector('#askCk')?.checked;
+function closeAsk(v) {
+  const f = askDone;
+  askDone = null;
+  if (askDlg.open) askDlg.close();
+  f?.(v);
+}
+let askGuard = 0; // 길게 눌러 연 직후, 손을 뗄 때 따라오는 클릭이 바깥(배경) 클릭으로 닫지 않게
+askDlg.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-v]');
+  if (Date.now() < askGuard || lpHeld) return;
+  if (b) { closeAsk(b.dataset.v || null); return; }
+  if (ev.target === askDlg) closeAsk(null);
+});
+askDlg.addEventListener('cancel', (ev) => { ev.preventDefault(); closeAsk(null); });
+askDlg.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter' && ev.target.matches?.('.ask-in input')) { ev.preventDefault(); askDlg.querySelector('.ask-go')?.click(); }
+});
+
+/* ---------- 일정 「더 보기」 메뉴(휴대폰: 길게 누름·왼쪽 밀기) ---------- */
+
+const eventById = (id) => S.events.find((x) => x.id === id) || searchPool?.evs.find((x) => x.id === id);
+
+async function eventActions(e) {
+  const ro = !!e.readOnly;
+  const items = [
+    { label: '편집', value: 'edit' },
+    { label: '복제', value: 'dup' },
+    ...(ro ? [] : [{ label: '다른 날로 옮기기…', value: 'move' }]),
+    { label: '템플릿으로 저장', value: 'tpl' },
+    ...(e.meet ? [{ label: '화상회의 참가', value: 'join' }] : []),
+    { label: navigator.share ? '공유…' : '글자로 복사', value: 'share' },
+    { label: '숨기기(이 기기만)', value: 'hide' },
+    ...(ro ? [] : [{ label: '삭제', value: 'delete', danger: true }]),
+  ];
+  const v = await ask({ title: e.title, msg: eventText(e, false).split('\n').slice(1).join('\n'), items, cancel: '닫기' });
+  if (v === 'edit') openEditor(e);
+  else if (v === 'dup') duplicateEvent(e);
+  else if (v === 'move') moveEventAsk(e);
+  else if (v === 'tpl') saveTemplate(e);
+  else if (v === 'join') window.open(e.meet, '_blank', 'noopener');
+  else if (v === 'share') shareEvent(e);
+  else if (v === 'hide') hideEvent(e);
+  else if (v === 'delete') deleteEvent(e);
+}
+async function shareEvent(e) {
+  const text = eventText(e);
+  if (navigator.share) { try { await navigator.share({ title: e.title, text }); } catch { /* 취소 */ } return; }
+  try { await navigator.clipboard.writeText(text); toast('일정 내용을 복사했습니다'); } catch { toast('복사하지 못했습니다'); }
+}
+
+/** 다른 날·시각으로 옮기기(길이는 그대로). 반복 회차는 이 일정만 옮긴다 */
+async function moveEventAsk(e) {
+  const v = await ask({
+    title: '다른 날로 옮기기',
+    msg: e.recurringEventId ? '반복 일정 중 이 일정만 옮깁니다.' : '',
+    input: `<input type="date" name="mvDate" value="${dayKey(e.start)}" aria-label="날짜">${e.allDay ? '' : `<input type="time" name="mvTime" value="${hm(e.start)}" step="300" aria-label="시각">`}`,
+    items: [{ label: '옮기기', value: 'ok' }],
+  });
+  if (v !== 'ok') return;
+  const d = askDlg.querySelector('[name=mvDate]').value;
+  if (!d) return;
+  const ns = e.allDay ? fromDayKey(d) : fromInputs(d, askDlg.querySelector('[name=mvTime]').value || hm(e.start));
+  moveEventTo(e, ns, ns + (e.end - e.start));
+}
+/** 일정 시각 바꾸기 + 실행 취소(드래그·옮기기 공용) */
+async function moveEventTo(e, start, end) {
+  if (start === e.start && end === e.end) return;
+  const saved = await guarded(() => updateEvent({ ...e, start, end }, e.calendarId));
+  if (!saved) return;
+  await render();
+  flash(saved.id);
+  toast(`‘${saved.title}’ ${fmtDate(saved.start)}${saved.allDay ? '' : ` ${fmtTime(saved.start)}`}(으)로${e.recurringEventId ? ' (이 일정만)' : ''}`, {
+    label: '실행 취소',
+    run: async () => { const back = await guarded(() => updateEvent({ ...saved, start: e.start, end: e.end }, saved.calendarId)); if (back) { await render(); flash(back.id); } },
+  });
+}
+
+/* ---------- 템플릿: 자주 쓰는 일정(제목·길이·캘린더·장소·메모·알림·URL)을 빠른 입력에서 한 번에 ---------- */
+function saveTemplate(e) {
+  const t = { title: e.title, dur: e.allDay ? S.defDur : Math.round((e.end - e.start) / 60e3), calendarId: e.calendarId,
+    location: e.location || '', note: e.note || '', reminder: e.reminder ?? null, url: e.url || '' };
+  S.templates = [t, ...S.templates.filter((x) => x.title !== t.title)].slice(0, 12);
+  localStorage.setItem(K_TPL, JSON.stringify(S.templates));
+  toast(`‘${e.title}’ 템플릿 저장 · 새 일정 입력 창에서 고릅니다`);
+}
+function renderTemplates() {
+  const box = $('#qsTpl');
+  box.hidden = !S.templates.length;
+  box.innerHTML = S.templates.length ? `<span class="tpl-h">템플릿</span>${S.templates.map((t, i) => `<span class="tpl${quickTpl === t ? ' on' : ''}"><button type="button" data-tpl="${i}" style="--c:${calById(t.calendarId)?.color || 'var(--accent)'}">${esc(t.title)}</button><button type="button" class="tpl-del" data-tpldel="${i}" aria-label="${esc(t.title)} 템플릿 지우기">×</button></span>`).join('')}` : '';
+}
+$('#qsTpl').addEventListener('click', async (ev) => {
+  const d = ev.target.closest('[data-tpldel]');
+  if (d) {
+    const t = S.templates[+d.dataset.tpldel];
+    if (await ask({ title: '템플릿을 지울까요?', msg: `‘${t.title}’`, items: [{ label: '지우기', value: 'ok', danger: true }] }) !== 'ok') return;
+    S.templates = S.templates.filter((x) => x !== t);
+    localStorage.setItem(K_TPL, JSON.stringify(S.templates));
+    if (quickTpl === t) quickTpl = null;
+    renderTemplates();
+    return;
+  }
+  const b = ev.target.closest('[data-tpl]');
+  if (!b) return;
+  const t = S.templates[+b.dataset.tpl];
+  quickTpl = quickTpl === t ? null : t;
+  // 제목이 비어 있으면 템플릿 제목을 넣고, 시간만 덧붙이면 되게 한다
+  if (quickTpl && !quick.value.trim()) quick.value = `${t.title} `;
+  renderTemplates();
+  quick.focus();
+  quick.dispatchEvent(new Event('input'));
+});
+
+/* ---------- 휴대폰 목록: 왼쪽으로 밀면 「더 보기」·「삭제」, 할 일은 오른쪽으로 밀어 완료, 길게 눌러 메뉴 ---------- */
+
+const SW_ROWS = '.m-list .ag-ev, .m-list .tsk, #tasksBody .tsk';
+const SW_BTN = 74; // 버튼 하나 너비
+let sw = null; // 지금 미는 줄
+let swOpen = null; // 버튼이 열린 줄 {row, wrap, off}
+let lpTimer = 0;
+let lpHeld = false; // 길게 눌러 메뉴를 연 손가락이 아직 화면에 있음
+let swBlockClick = 0; // 밀기·길게 누름 뒤 따라오는 click 은 무시
+
+function rowItem(row) {
+  if (row.dataset.task) { const t = S.tasks.find((x) => x.id === row.dataset.task); return t ? { kind: 'task', t } : null; }
+  const e = row.dataset.id && eventById(row.dataset.id);
+  return e ? { kind: 'ev', e } : null;
+}
+/** 줄을 감싸고 뒤에 버튼을 깐다(밀기 시작할 때만) */
+function wrapRow(row) {
+  if (row.parentElement?.classList.contains('sw')) return row.parentElement;
+  const it = rowItem(row);
+  if (!it) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'sw';
+  const right = it.kind === 'ev'
+    ? `<button type="button" class="sw-b sw-more" data-sw="more">더 보기</button>${it.e.readOnly ? '' : '<button type="button" class="sw-b del" data-sw="delete">삭제</button>'}`
+    : '<button type="button" class="sw-b del" data-sw="tdelete">삭제</button>';
+  const left = it.kind === 'task' ? `<button type="button" class="sw-b done" data-sw="tdone">${it.t.done ? '완료 취소' : '완료'}</button>` : '';
+  wrap.innerHTML = `<div class="sw-acts sw-l">${left}</div><div class="sw-acts sw-r">${right}</div>`;
+  row.before(wrap);
+  wrap.append(row);
+  wrap.dataset.r = String(wrap.querySelectorAll('.sw-r .sw-b').length);
+  wrap.dataset.l = String(wrap.querySelectorAll('.sw-l .sw-b').length);
+  return wrap;
+}
+function setRowX(row, x, anim) {
+  row.style.transition = anim ? 'transform .22s cubic-bezier(.2,.9,.3,1)' : 'none';
+  row.style.transform = x ? `translateX(${x}px)` : '';
+  const wrap = row.parentElement;
+  if (wrap?.classList.contains('sw')) { wrap.classList.toggle('show-r', x < 0); wrap.classList.toggle('show-l', x > 0); }
+}
+function closeSwipe(anim = true) {
+  const o = swOpen;
+  swOpen = null;
+  if (!o) return;
+  setRowX(o.row, 0, anim);
+  setTimeout(() => { if (o.wrap.isConnected && swOpen?.row !== o.row && !sw) { o.row.style.transition = ''; o.wrap.replaceWith(o.row); } }, anim ? 240 : 0);
+}
+document.addEventListener('pointerdown', (ev) => {
+  if (!mq.matches || ev.button > 0) return;
+  const row = ev.target.closest(SW_ROWS);
+  if (swOpen && !ev.target.closest('.sw-acts') && row !== swOpen.row) { closeSwipe(); swBlockClick = Date.now() + 350; }
+  if (!row || ev.target.closest('.sw-acts, [data-join]')) return;
+  sw = { row, id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, mode: null, base: swOpen?.row === row ? swOpen.off : 0, x: 0 };
+  clearTimeout(lpTimer);
+  lpTimer = setTimeout(() => {
+    if (!sw || sw.mode || sw.row !== row) return;
+    sw = null;
+    lpHeld = true;
+    swBlockClick = Date.now() + 700;
+    navigator.vibrate?.(8);
+    row.classList.add('lp');
+    setTimeout(() => row.classList.remove('lp'), 300);
+    const it = rowItem(row);
+    if (it?.kind === 'ev') eventActions(it.e);
+    else if (it?.kind === 'task') taskActions(it.t);
+  }, 520);
+}, true);
+document.addEventListener('pointermove', (ev) => {
+  if (!sw || ev.pointerId !== sw.id) return;
+  const dx = ev.clientX - sw.x0;
+  const dy = ev.clientY - sw.y0;
+  if (!sw.mode) {
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+    clearTimeout(lpTimer);
+    if (Math.abs(dx) <= Math.abs(dy) * 1.2) { sw = null; return; } // 세로: 목록 스크롤
+    sw.mode = 'h';
+    if (swOpen && swOpen.row !== sw.row) closeSwipe(false);
+    sw.wrap = wrapRow(sw.row);
+    if (!sw.wrap) { sw = null; return; }
+  }
+  const maxR = +sw.wrap.dataset.r * SW_BTN;
+  const maxL = +sw.wrap.dataset.l * SW_BTN;
+  let x = sw.base + dx;
+  if (x > 0 && !maxL) x = 0;
+  const w = sw.row.offsetWidth;
+  if (x < -maxR) x = -maxR + (x + maxR) * (sw.wrap.dataset.r ? 0.55 : 0.2); // 끝까지 밀면 계속 따라오되 무겁게
+  if (x > maxL && maxL) x = maxL + (x - maxL) * 0.55;
+  sw.x = Math.max(-w, Math.min(w, x));
+  setRowX(sw.row, sw.x, false);
+}, true);
+function endSwipe(ev) {
+  clearTimeout(lpTimer);
+  if (lpHeld) { lpHeld = false; askGuard = Date.now() + 300; }
+  const s0 = sw;
+  sw = null;
+  if (!s0 || s0.mode !== 'h' || (ev && ev.pointerId !== s0.id)) return;
+  swBlockClick = Date.now() + 350;
+  const { row, wrap, x } = s0;
+  const w = row.offsetWidth;
+  const maxR = +wrap.dataset.r * SW_BTN;
+  const maxL = +wrap.dataset.l * SW_BTN;
+  const it = rowItem(row);
+  // 끝까지 민 경우: 왼쪽 = 삭제(확인창), 오른쪽 = 할 일 완료
+  if (x < -w * 0.62 && wrap.querySelector('[data-sw$=delete]')) {
+    swOpen = { row, wrap, off: -maxR };
+    setRowX(row, -maxR, true);
+    swipeAct(wrap.querySelector('[data-sw$=delete]').dataset.sw, it, row);
+    return;
+  }
+  if (x > maxL * 0.6 && maxL) {
+    swOpen = { row, wrap, off: 0 };
+    closeSwipe();
+    if (it?.kind === 'task') toggleTask(it.t.id);
+    return;
+  }
+  if (x < -maxR / 2) { swOpen = { row, wrap, off: -maxR }; setRowX(row, -maxR, true); return; }
+  swOpen = { row, wrap, off: 0 };
+  closeSwipe();
+}
+document.addEventListener('pointerup', endSwipe, true);
+document.addEventListener('pointercancel', (ev) => { if (sw?.mode === 'h') endSwipe(ev); else { clearTimeout(lpTimer); sw = null; if (lpHeld) { lpHeld = false; askGuard = Date.now() + 300; } } }, true);
+// 아이폰: 길게 누를 때 글자 고르기·미리보기 대신 앱 메뉴
+document.addEventListener('contextmenu', (ev) => { if (mq.matches && ev.target.closest?.(SW_ROWS)) ev.preventDefault(); });
+
+async function swipeAct(act, it, row) {
+  if (!it) return;
+  if (act === 'more') { closeSwipe(); eventActions(it.e); return; }
+  if (act === 'delete') { const ok = await deleteEvent(it.e); if (!ok) closeSwipe(); return; }
+  if (act === 'tdone') { closeSwipe(); toggleTask(it.t.id); return; }
+  if (act === 'tdelete') { const ok = await deleteTask(it.t); if (!ok) closeSwipe(); }
+}
+async function taskActions(t) {
+  const v = await ask({ title: t.title || '(제목 없음)', msg: t.due != null ? `마감 ${fmtDate(t.due)}` : '마감일 없음',
+    items: [{ label: t.done ? '완료 취소' : '완료', value: 'done' }, { label: '편집', value: 'edit' }, { label: '삭제', value: 'delete', danger: true }], cancel: '닫기' });
+  if (v === 'done') toggleTask(t.id);
+  else if (v === 'edit') openTaskEditor(t);
+  else if (v === 'delete') deleteTask(t);
+}
+
+/* ---------- 휴대폰 일·3일 보기: 좌우로 밀면 앞뒤 날 ---------- */
+let gsw = null;
+document.addEventListener('pointerdown', (ev) => {
+  if (!mq.matches || !ev.target.closest('#view.v-day .tg, #view.v-week .tg')) { gsw = null; return; }
+  gsw = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
+});
+document.addEventListener('pointerup', (ev) => {
+  const g = gsw;
+  gsw = null;
+  if (!g || ev.pointerId !== g.id) return;
+  const dx = ev.clientX - g.x;
+  const dy = ev.clientY - g.y;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { swBlockClick = Date.now() + 350; go(dx < 0 ? 1 : -1); }
+});
+document.addEventListener('pointercancel', () => { gsw = null; });
+
+/* ---------- 데스크톱: 끌어서 옮기기(주·일 보기 시간 칸 15분 단위, 월 보기 날짜), 아래 끝을 끌어 길이 바꾸기 ---------- */
+let drag = null;
+let dragBlock = 0;
+document.addEventListener('pointerdown', (ev) => {
+  if (mq.matches || ev.button !== 0 || ev.pointerType === 'touch' || dlg.open) return;
+  const el = ev.target.closest('.tg-ev, .mv-cell .chip, .mv-bar');
+  if (!el) return;
+  const e = S.events.find((x) => x.id === el.dataset.id);
+  if (!e || e.readOnly) return;
+  const grid = el.classList.contains('tg-ev');
+  drag = { el, e, x0: ev.clientX, y0: ev.clientY, id: ev.pointerId, started: false,
+    mode: grid ? (ev.target.closest('.rz') ? 'resize' : 'move') : 'day',
+    col: grid ? el.closest('.tg-col') : null, h0: el.offsetHeight };
+});
+document.addEventListener('pointermove', (ev) => {
+  const d = drag;
+  if (!d || ev.pointerId !== d.id) return;
+  const dx = ev.clientX - d.x0;
+  const dy = ev.clientY - d.y0;
+  if (!d.started) {
+    if (Math.hypot(dx, dy) < 5) return;
+    d.started = true;
+    closeCtx();
+    d.el.classList.add('dragging');
+    document.body.classList.add('is-dragging');
+  }
+  d.el.style.pointerEvents = 'none';
+  const under = document.elementFromPoint(ev.clientX, ev.clientY);
+  if (d.mode === 'day') {
+    // 종일 막대 위에 놓아도 그 아래 날짜 칸을 찾는다
+    const cell = document.elementsFromPoint(ev.clientX, ev.clientY).map((n) => n.closest?.('.mv-cell[data-day]')).find(Boolean);
+    document.querySelectorAll('.mv-cell.drop').forEach((c) => c !== cell && c.classList.remove('drop'));
+    cell?.classList.add('drop');
+    d.day = cell ? fromDayKey(cell.dataset.day) : null;
+    d.el.style.transform = `translate(${dx}px, ${dy}px)`;
+    return;
+  }
+  const dm = Math.round((dy / HH) * 4) * 15; // 15분 단위
+  if (d.mode === 'resize') {
+    const dur = Math.max(15, Math.round((d.e.end - d.e.start) / 60e3) + dm);
+    d.el.style.height = `${Math.max((dur / 60) * HH - 2, 16)}px`;
+    d.next = { start: d.e.start, end: d.e.start + dur * 60e3 };
+  } else {
+    const col = under?.closest('.tg-col[data-day]') || d.col;
+    const days = Math.round((fromDayKey(col.dataset.day) - fromDayKey(d.col.dataset.day)) / DAY);
+    const shift = days * DAY + dm * 60e3;
+    d.el.style.transform = `translate(${col.getBoundingClientRect().left - d.col.getBoundingClientRect().left}px, ${(dm / 60) * HH}px)`;
+    d.next = { start: d.e.start + shift, end: d.e.end + shift };
+  }
+  const tm = d.el.querySelector('.tm');
+  if (tm && d.next) tm.textContent = `${fmtTime(d.next.start)} – ${fmtTime(d.next.end)}`;
+});
+document.addEventListener('pointerup', (ev) => {
+  const d = drag;
+  drag = null;
+  if (!d || ev.pointerId !== d.id) return;
+  if (!d.started) return;
+  dragBlock = Date.now() + 300;
+  document.body.classList.remove('is-dragging');
+  document.querySelectorAll('.mv-cell.drop').forEach((c) => c.classList.remove('drop'));
+  let next = d.next;
+  if (d.mode === 'day' && d.day != null) {
+    const shift = d.day - startOfDay(d.e.start);
+    next = { start: d.e.start + shift, end: d.e.end + shift };
+  }
+  if (!next || (next.start === d.e.start && next.end === d.e.end)) { render(); return; }
+  moveEventTo(d.e, next.start, next.end);
+});
+
+/* ---------- 캘린더 색(이 기기)·묶음·기본값 ---------- */
+const PALETTE = [['토마토', '#d50000'], ['플라밍고', '#e67c73'], ['귤', '#f4511e'], ['바나나', '#f6bf26'], ['세이지', '#33b679'], ['바질', '#0b8043'],
+  ['공작', '#039be5'], ['블루베리', '#3f51b5'], ['라벤더', '#7986cb'], ['포도', '#8e24aa'], ['흑연', '#616161'], ['빨강', '#e5413a'], ['하늘', '#3a87f2'], ['초록', '#16a34a'], ['보라', '#7c5cff'], ['주황', '#f59e0b']];
+async function pickCalColor(id) {
+  const c = calById(id);
+  if (!c) return;
+  const v = await ask({ title: `‘${c.name}’ 색`, msg: '이 기기에서만 바뀝니다(구글 캘린더 색은 그대로).',
+    items: [{ label: '원래 색', value: 'reset', dot: c.origColor }, ...PALETTE.map(([l, hex]) => ({ label: l, value: hex, dot: hex }))] });
+  if (!v) return;
+  if (v === 'reset') delete S.calColors[id]; else S.calColors[id] = v;
+  localStorage.setItem(K_CALCOL, JSON.stringify(S.calColors));
+  paintCals();
+  render();
+}
+$('#defCalSel').addEventListener('change', (ev) => { localStorage.setItem(K_DEFCAL, ev.target.value); toast(`새 일정 기본 캘린더: ${calById(ev.target.value)?.name || ''}`); });
+$('#defDurSel').addEventListener('change', (ev) => { S.defDur = +ev.target.value; localStorage.setItem(K_DUR, String(S.defDur)); });
+$('#weekNumChk').addEventListener('change', (ev) => { S.weekNum = ev.target.checked; localStorage.setItem(K_WKNUM, S.weekNum ? '1' : '0'); render(); });
+$('#setSel').addEventListener('change', (ev) => {
+  const x = S.sets[+ev.target.value];
+  if (!x || ev.target.value === '') return;
+  const keepTasks = S.hidden.has(TASKS_KEY) ? [TASKS_KEY] : [];
+  S.hidden = new Set([...keepTasks, ...x.hidden]);
+  localStorage.setItem(K_HIDDEN, JSON.stringify([...S.hidden]));
+  render();
+  toast(`캘린더 묶음: ${x.name}`);
+});
+$('#setSave').addEventListener('click', async () => {
+  const v = await ask({ title: '캘린더 묶음 저장', msg: '지금 켜 둔 캘린더 조합을 이름 붙여 저장합니다.',
+    input: '<input type="text" name="setName" placeholder="예: 업무만" aria-label="묶음 이름">', items: [{ label: '저장', value: 'ok' }] });
+  const name = askDlg.querySelector('[name=setName]')?.value.trim();
+  if (v !== 'ok' || !name) return;
+  const hidden = S.cals.map((c) => c.id).filter((id) => S.hidden.has(id));
+  S.sets = [...S.sets.filter((x) => x.name !== name), { name, hidden }];
+  localStorage.setItem(K_SETS, JSON.stringify(S.sets));
+  renderCals();
+  toast(`‘${name}’ 묶음을 저장했습니다`);
+});
+$('#setDel').addEventListener('click', async () => {
+  const x = S.sets[+$('#setSel').value];
+  if (!x) return;
+  if (await ask({ title: '묶음을 지울까요?', msg: `‘${x.name}’ (캘린더·일정은 그대로)`, items: [{ label: '지우기', value: 'ok', danger: true }] }) !== 'ok') return;
+  S.sets = S.sets.filter((y) => y !== x);
+  localStorage.setItem(K_SETS, JSON.stringify(S.sets));
+  renderCals();
+});
 
 /* ---------- 시작 ---------- */
 

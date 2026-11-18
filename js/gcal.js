@@ -3,6 +3,7 @@
 // 아이폰 홈 화면 앱(standalone)에서는 팝업이 잘 안 되므로 팝업 대신 같은 창 리디렉션을 쓴다.
 // 토큰은 1시간짜리라 만료되면 조용히(prompt=none) 다시 받아 온다. 비밀값(client secret)은 쓰지 않는다.
 import { TZ, rfc3339, dayKey, fromDayKey, DAY } from './time.js';
+import { truncateBefore } from './recur.js';
 
 const API = 'https://www.googleapis.com/calendar/v3';
 const TASKS_API = 'https://tasks.googleapis.com/tasks/v1';
@@ -39,9 +40,18 @@ export function fromGoogle(ev, cal) {
     location: ev.location || '',
     note: ev.description || '',
     color: ev.colorId ? EVENT_COLORS[ev.colorId] : null,
-    recurring: !!ev.recurringEventId,
+    recurring: !!ev.recurringEventId || !!ev.recurrence,
     readOnly: cal.readOnly || ev.locked === true,
     link: ev.htmlLink || '',
+    // 반복: 회차(instance)는 원본(master) id 와 원래 시작 시각, 원본은 RRULE 줄
+    ...(ev.recurringEventId ? { recurringEventId: ev.recurringEventId } : {}),
+    ...(ev.originalStartTime ? { originalStart: ev.originalStartTime.date ? fromDayKey(ev.originalStartTime.date) : Date.parse(ev.originalStartTime.dateTime) } : {}),
+    ...(ev.recurrence ? { recurrence: ev.recurrence } : {}),
+    // URL(구글 source), 참석자, 일정 시간대(서울이 아닐 때만), 화상회의 링크
+    ...(ev.source?.url ? { url: ev.source.url } : {}),
+    ...(ev.attendees?.length ? { attendees: ev.attendees.map(attFromGoogle) } : {}),
+    ...(ev.start?.timeZone && ev.start.timeZone !== TZ ? { tz: ev.start.timeZone } : {}),
+    ...(meetOf(ev) ? { meet: meetOf(ev) } : {}),
     // 오른쪽 클릭 메뉴(색상·보기 방식·공개 범위)용. 구글에 값이 있을 때만 둔다
     ...(ev.colorId ? { colorId: ev.colorId } : {}),
     ...(ev.transparency === 'transparent' ? { free: true } : {}),
@@ -50,18 +60,33 @@ export function fromGoogle(ev, cal) {
   };
 }
 
-/** 알림: 'default'(캘린더 기본) | 'none' | 분(팝업 1개) | 'custom'(앱에서 못 고치는 설정: 그대로 둔다) */
+const attFromGoogle = (a) => ({
+  email: a.email || '', name: a.displayName || '', status: a.responseStatus || 'needsAction',
+  ...(a.self ? { self: true } : {}), ...(a.organizer ? { organizer: true } : {}), ...(a.optional ? { optional: true } : {}),
+});
+/** 화상회의(구글 Meet 등) 참가 주소 */
+export function meetOf(ev) {
+  if (ev.hangoutLink) return ev.hangoutLink;
+  return ev.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri || '';
+}
+
+/** 알림: 'default'(캘린더 기본) | 'none' | 분(팝업 1개) | [분, 분…](팝업 여러 개) | 'custom'(이메일 알림 등: 그대로 둔다) */
 export function reminderFromGoogle(r) {
   if (!r || r.useDefault) return 'default';
   const o = r.overrides || [];
   if (!o.length) return 'none';
-  if (o.length === 1 && o[0].method === 'popup') return o[0].minutes;
+  if (o.every((x) => x.method === 'popup')) {
+    const mins = [...new Set(o.map((x) => x.minutes))].sort((a, b) => a - b);
+    return mins.length === 1 ? mins[0] : mins;
+  }
   return 'custom';
 }
 export function reminderToGoogle(v) {
   if (v === 'default') return { useDefault: true };
   if (v === 'none') return { useDefault: false, overrides: [] };
   if (Number.isFinite(v)) return { useDefault: false, overrides: [{ method: 'popup', minutes: v }] };
+  // 구글은 알림을 일정 하나에 다섯 개까지 받는다
+  if (Array.isArray(v)) return { useDefault: false, overrides: [...new Set(v)].slice(0, 5).map((minutes) => ({ method: 'popup', minutes })) };
   return undefined; // undefined·'custom': 보내지 않으면 구글에 있던 알림이 그대로 남는다
 }
 
@@ -75,8 +100,22 @@ export function toGoogle(e) {
     body.start = { date: dayKey(e.start) };
     body.end = { date: dayKey(Math.max(e.end, e.start + DAY)) };
   } else {
-    body.start = { dateTime: rfc3339(e.start), timeZone: TZ };
-    body.end = { dateTime: rfc3339(e.end), timeZone: TZ };
+    // 시각은 늘 +09:00 으로 보내고(절대 시각), 시간대 이름은 일정 시간대(없으면 서울)로 둔다
+    body.start = { dateTime: rfc3339(e.start), timeZone: e.tz || TZ };
+    body.end = { dateTime: rfc3339(e.end), timeZone: e.tz || TZ };
+  }
+  // 반복 규칙·URL 은 앱에서 정했을 때만 보낸다(안 보내면 구글 값 그대로)
+  if (e.recurrence !== undefined) body.recurrence = e.recurrence;
+  if (e.url !== undefined) body.source = e.url ? { title: e.title || 'URL', url: e.url } : null;
+  // 참석자는 앱에서 바꿨을 때만 보낸다(남이 만든 일정의 참석자 목록을 건드리지 않게)
+  if (e.attendeesChanged && e.attendees) {
+    body.attendees = e.attendees.map((a) => ({
+      email: a.email, ...(a.status ? { responseStatus: a.status } : {}), ...(a.optional ? { optional: true } : {}),
+      ...(a.name ? { displayName: a.name } : {}),
+    }));
+  }
+  if (e.addMeet) {
+    body.conferenceData = { createRequest: { requestId: `jbcal-${Date.now().toString(36)}`, conferenceSolutionKey: { type: 'hangoutsMeet' } } };
   }
   // reminders를 보내지 않으면 새 일정은 캘린더 기본 알림, 고칠 때는 원래 알림이 그대로 남는다.
   const reminders = reminderToGoogle(e.reminder);
@@ -248,7 +287,7 @@ export const googleStore = {
     return lists.flat();
   },
   async create(e, cal) {
-    const r = await call(`/calendars/${enc(e.calendarId)}/events`, { method: 'POST', body: toGoogle(e) });
+    const r = await call(`/calendars/${enc(e.calendarId)}/events`, { method: 'POST', body: toGoogle(e), query: writeQuery(e) });
     return fromGoogle(r, cal);
   },
   async update(e, cal, prevCalendarId) {
@@ -258,13 +297,43 @@ export const googleStore = {
         method: 'POST', query: { destination: e.calendarId },
       });
     }
-    const r = await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'PATCH', body: toGoogle(e) });
+    const r = await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'PATCH', body: toGoogle(e), query: writeQuery(e) });
     return fromGoogle(r, cal);
   },
   async remove(e) {
-    await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'DELETE' });
+    await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'DELETE', query: { sendUpdates: e.notify ? 'all' : 'none' } });
+  },
+  /** 한 일정(반복 원본 포함) 그대로 읽기 */
+  async get(calendarId, id, cal) {
+    return fromGoogle(await call(`/calendars/${enc(calendarId)}/events/${enc(id)}`), cal || { id: calendarId });
+  },
+  /** 반복 일정 「이후 모든 일정」 삭제: 원본 규칙을 이 회차 앞에서 끝낸다. 첫 회차면 원본을 지운다.
+   *  되돌리기에 쓸 값을 돌려준다: {masterId, prev}(규칙 되돌림) 또는 {deletedAll: true} */
+  async removeFollowing(e) {
+    const path = `/calendars/${enc(e.calendarId)}/events/${enc(e.recurringEventId)}`;
+    const master = await call(path);
+    const ms = master.start.date ? fromDayKey(master.start.date) : Date.parse(master.start.dateTime);
+    if ((e.originalStart ?? e.start) <= ms) {
+      await call(path, { method: 'DELETE', query: { sendUpdates: 'none' } });
+      return { deletedAll: true };
+    }
+    const prev = master.recurrence || [];
+    await call(path, { method: 'PATCH', body: { recurrence: truncateBefore(prev, e.originalStart ?? e.start, !!master.start.date) }, query: { sendUpdates: 'none' } });
+    return { masterId: master.id, prev };
+  },
+  /** 반복 원본 규칙 바꾸기(「이후 모두」 되돌리기) */
+  async setRecurrence(calendarId, masterId, recurrence) {
+    await call(`/calendars/${enc(calendarId)}/events/${enc(masterId)}`, { method: 'PATCH', body: { recurrence }, query: { sendUpdates: 'none' } });
+  },
+  /** 「이 일정만」 지운 반복 회차 되살리기 */
+  async restoreInstance(e) {
+    await call(`/calendars/${enc(e.calendarId)}/events/${enc(e.id)}`, { method: 'PATCH', body: { status: 'confirmed' }, query: { sendUpdates: 'none' } });
   },
 };
+/** 쓰기 요청 덧붙임: 참석자에게 메일(사용자가 고른 때만), 구글 Meet 만들기 */
+function writeQuery(e) {
+  return { sendUpdates: e.notify ? 'all' : 'none', ...(e.addMeet || e.meet ? { conferenceDataVersion: 1 } : {}) };
+}
 
 /* ---------- 할 일 (Google Tasks) ---------- */
 // 구글 할 일의 마감일은 날짜만 쓴다(시각은 구글이 버린다). 'YYYY-MM-DDT00:00:00.000Z' 의 날짜 부분이 그 날이다.
