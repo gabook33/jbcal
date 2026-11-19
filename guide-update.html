@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>JB's 캘린더 최신판으로 바꾸기</title>
+<style>
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body { margin: 0; background: #f2f2f7; color: #1c1c1e;
+         font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", sans-serif;
+         font-size: 21px; line-height: 1.65; word-break: keep-all; overflow-wrap: break-word; }
+  main { max-width: 760px; margin: 0 auto; padding: 18px 16px 60px; }
+  header.top { text-align: center; padding: 22px 8px 4px; }
+  header.top img { width: 88px; height: 88px; border-radius: 20px; }
+  h1 { font-size: 30px; line-height: 1.3; margin: 10px 0 4px; }
+  .date { color: #6e6e73; font-size: 18px; margin: 0; }
+  section { background: #fff; border-radius: 18px; padding: 22px 20px; margin: 20px 0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  h2 { font-size: 26px; line-height: 1.35; margin: 0 0 12px; }
+  h2 .no { display: inline-block; min-width: 40px; height: 40px; line-height: 40px; text-align: center; border-radius: 20px;
+           background: #e5413a; color: #fff; font-size: 22px; margin-right: 8px; vertical-align: 2px; }
+  ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 10px 0; }
+  ol.steps > li { counter-increment: s; position: relative; padding: 2px 0 14px 50px; }
+  ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 2px; width: 36px; height: 36px; line-height: 36px;
+           text-align: center; border-radius: 50%; background: #1c1c1e; color: #fff; font-weight: 700; font-size: 19px; }
+  .btn { display: inline-block; padding: 0 10px; border-radius: 8px; background: #eef0f4; border: 1px solid #d5d8de; font-weight: 700; }
+  .key { display: inline-block; padding: 0 8px; border-radius: 6px; background: #fff; border: 1px solid #b9bcc4; border-bottom-width: 3px; font-weight: 700; font-family: inherit; }
+  .note { background: #fff8e1; border-left: 6px solid #f4b400; border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 19px; }
+  .ok { background: #e8f5e9; border-left: 6px solid #34a853; border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 19px; }
+  .sub { font-size: 18px; color: #6e6e73; }
+  /* 맨 위: 열기·복사 */
+  .hero { text-align: center; }
+  a.open { display: block; background: #e5413a; color: #fff; text-decoration: none; font-size: 27px; font-weight: 800;
+           padding: 20px 12px; border-radius: 16px; margin: 4px 0 16px; box-shadow: 0 3px 8px rgba(229,65,58,.35); }
+  a.open:active { transform: scale(.98); }
+  .addr { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 23px; font-weight: 700; color: #0a58ca; background: #f2f2f7;
+          border-radius: 10px; padding: 12px 8px; word-break: break-all; user-select: all; -webkit-user-select: all; -webkit-touch-callout: default; }
+  button.copy { margin-top: 12px; width: 100%; font: inherit; font-size: 23px; font-weight: 700; padding: 14px 10px; border-radius: 14px;
+                border: 2px solid #1c1c1e; background: #fff; color: #1c1c1e; cursor: pointer; }
+  button.copy.done { border-color: #34a853; background: #e8f5e9; color: #1e7b34; }
+  #copyMsg { min-height: 1.2em; margin: 10px 0 0; font-size: 19px; }
+  #copyMsg.fail { color: #b3261e; font-weight: 700; }
+  ul.feat { list-style: none; padding: 0; margin: 8px 0; }
+  ul.feat li { padding: 10px 0 10px 46px; position: relative; border-top: 1px solid #e5e5ea; }
+  ul.feat li:first-child { border-top: 0; }
+  ul.feat .ic { position: absolute; left: 2px; top: 9px; font-size: 26px; }
+  .tag { display: inline-block; font-size: 16px; padding: 0 8px; border-radius: 6px; font-weight: 700; vertical-align: 2px; white-space: nowrap; }
+  .tag.now { background: #e8f5e9; color: #1e7b34; }
+  .tag.ask { background: #e8f0fe; color: #1a56c4; }
+  table.trouble { width: 100%; border-collapse: collapse; font-size: 19px; }
+  table.trouble td { border-top: 1px solid #e5e5ea; padding: 10px 6px; vertical-align: top; }
+  table.trouble td:first-child { width: 42%; font-weight: 700; }
+  footer { text-align: center; color: #8e8e93; font-size: 16px; margin-top: 30px; }
+  @media (max-width: 480px) { body { font-size: 20px; } h1 { font-size: 27px; } h2 { font-size: 24px; } section { padding: 18px 14px; } .addr { font-size: 20px; } }
+</style>
+</head>
+<body>
+<main>
+
+<header class="top">
+  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAAQAElEQVR4nOydCXxTVfbHT9Ym3Skt3UBageKwiOCwuSCKwogoOIjCuGGrUJDFvzsjwoyKiIKCZav6RxGRZZRdlsKAMBRZBEoLlH0ptqWle5OmSZpk7klAGUjSJO+1zXvvfD+f+2leXhJKen73nnPuuffKgSAkjBwIQsKQAAhJQwIgJI3QBKBgTQ0EwRNK8C9QkFpwGLniapNf95jwb6ysWa5rN16brv70G/xBACpwGD22ANZkm8amjgySydoordZ4hcnUQmGqbQYGQ4itWqe1VVepbLW1QPgfMo0GZCGhZllIsAG02mqLWlNuCVAXWeSK/Gqr9czA+Qu/BYcIalgzXH3cpMigadCwFggOo1e+8dD9LQe1v21sYHnZA7bz52PURhMo2G8ml8lYty8D5bXH9mv2rdlsQPgfVht2+Taw2LBdewyOa/bYLpDEWwsN4c22rT91Iv2TrTsugkMI11qj/2EbWwDBrIWzpljw9NPduoQFp6qLi3rBhYuhqAiNXM6aDGSyptIl0ZDUWq2/tzpmevLEhCpLdMwvhyuq08csXfore0nV1dZoQmgsS0Ofvjn+XJYysl9STc1HilOnoq4ZvEpOySipUcdGhWtiMLKmSLrtyqmQ4HdGfLloE7tdwZoOGoGGFgBadjPWgtJGjOjWSyWfo8k9fkuYQmF3ZwgCsTIxVFksoGdCkHXsdPGw1fraqO+W/cJulYPDNWowGtIKMaCNmjxoUNvHoiPnKo/mdETfJ4B6e8IFGCtU1VmgBjvHLl2ObSwqmfCP9euPs1tl0EABc0MJIOiFXr3ap3buNE9xLKdXaJ0ZghSUxSQ8w8xGAhwRatUBYOl0+55vTh2fmP5z5ilwxAe80hACCP/imWf6dy0uWKosLVNGqpT2DA5BeIuBiaCsjoXLkZHmI3Hxz734zZKt7OlS4BE+u2W08harRr34dPuzp77SVFUpItUqyugQPoPJES1rBp1eEV2jHzpwwIDLKw4eOgeOeQRe4Ms60bGP3jFu7JTgX/enBjPlhir9bZKZECo2FhuUspHAyGyq5s89vuw7d/5U9nQx8DCrzIcAcCa3RebY0enqvb880kypAq2CAl2Cf6pZgFxpqQNb77u29Jq3MAUcIjADB7gKAF2o2APJz2dAVtaf0N9XU5aHaEBwzqDUXAfWbl2P9fzqm7+wpwqBw0jA1Vqjdo9NnYvGH838fTJ+oqHBNDramvzQ4Y5222M2CBzgYrGRG8aMSVbv3zc4ivX8NLFFNBZoa3Zvg9nehtRUdIUiwUd8tdqw2cOH33d34aU1zQwGmZZy/KDu2s3lvboLF8BaXub0niwwCFTt24PPsADRVlMDVr0ebHodWCsqQCpgmrRcq7VlxrYa8sry5TvZU5XgJb4IQJv6wAOdUwI1O4OLCjWU7XEQt2e/y3vl/5wChi2bnd5Td+4Mken/D3xSd+E81O7+D1QvWQy26moQM5UsO6SPia394MKlHmtzcs6Al6UT3rpAqnCW7kyJjNgUcLmAjN9PUSYkQvAzz0H0ylWguedeEDNhzAYDCgs073bpuAltExxZSY/xVgBRG8amzlacPR0RQcbv98jDwiDi41kQNHQYiBm0RVlubjzaJngZFHsjgCDm+rTUHDv6WHMVzfB6RRN/V6HjJ4IiLg7ECtpicxwJmG2ijbKngjx9r6cCwL9geHKbhAUavV6mJOMXFDK1GkKefwHEjL1sgtnmC+3azAHHoiuPjNRTPyZkwdNP94AjR7qFKSnj4zXulnDWs/ZJv2I5WHXuA1lVm7ag6Xu/29do7usLMH0aiJlQZpuGozm9pg0Zcts7a9bgl1Zv9agnAkAlhXWXWdKCbFaQy8j3b0x0K5eDpbCg3tepb+8CER99AvLwcKf35aFh9pjAWul1plAw4PxAkMkIDzULXfAOQD/2FIrAbRfjiQsUtjp11Ajb8dz4EMr3+y2m7CNQNulNt6+RN4sAsRPKbFSWk91u2UvJWCYRVt/r5R7cD211uXAKDi8U+PqIu++tvq/Ui6/cdCQLbGY3tWFWv9qSp0FAGw1l8UDbyqqP2GUo1GPj9Qkg5IdRox615l0MCqbe33c4xABe749gcW3kdXl5IAWCmABsZ05FoO2yyxB3r61PANqWctkTGipy40YjjQCKlq3se+84w5R1GKQCjgJos2i74NiDyiXuLBu/erWyML+7lgQgCEKee97lPf2a1SAlUABou3B1t0FXr3Nn2YEfP/54B+ulvCASAEca2AWSN28O4W++DYGDHnN633zsKBgyNoOUQJu1MNud9eTQTuDYgdAp7nKa2rtio1PVeecp+G1CIt77AGwmFzuC4FaRMbGsxbh8v/lELpS8Mh6kBm7EECCTQ8/IqFHsch+4WEfsVgABJSX30vJGHuAQA6g6dgJfsBmNUL3oK9AtXcKyP1aQImi7ZmbD4GYEcGXdAakPPBBrPX8ugtwfYSJDH7hVK1DEircGqD4wDkAb7p2QgHvSOj1XwpV1qwckte0rZyk1WunFA1xiAF9RqewxQfS/VrH4YBJIEaxZQxt+8y/9MTjySgDyMLWyNRW98QSXNCgPBA55HCI++9wuCqmB2+yjLYOLPbBcxQDKQIu1jYLsnx84jADlUyeDpaTE5X2ZOgCUcXGgapcEgQMHsn4uwOnrND17QcgLKVD9xUKQEujBoC2DlwKQy02mKDmQApoa09Gj9RbDGa/+rFwwDyLT5oEqyfka4+ChT4Duu2/ta4ilAh6wgrYMXgpAITeamkttBFDd9ieQaW9OGOCRTObc4+Dv2KqroPzdd6DFih+c3peFhEJA125Qm7kbpIL9pCFmy+CtAKBG10xqMUCzv08GZdt2Nz1fd/EiFI/gsKywkUohkLpLeWA+eQJU7W9zel+ZeCuApATAvkBmy+BCAK6CYAXo9Rqp7epsc+Wryzl+DxY3eXi+i+EY5rNnXN5TJiaClLC78cyWwQsB4HMya1W1WnL1ny4mjOTaQLdvkwUEuL1vM7j2uW31Hfjny4GAJtdnSSjjW4KUwAMW0ZbBMZbeZO/OBGDv7vCPJrURwFpR7vR5eWSk09jg9/vNm4Pbz3WzCqveMhMf/ga4LYrL30Xk+wTdCNrwdR3QTV8mTfNeh6WszOW9gO49Xd5T11OuYCm6DI0FpkPVd3R1ed96pRiIPyABXIf5xAmX90JTx7jMsQcP/5vL99lq9GApdm10fLpAmvvuh+Zz5rp9Te2B/UD8Aa1wv47aXT9D2P+95vQeuhUxP6y2pxBNR7OhrqAAFMz1CUl5CZStE1x+pvHXA8CF4KdG1LsrBP4eOEIp4uPdvs5acgVqd2wH4g9IANdhKSoC495fIKBXb6f3MRYIHDzE3jzFkJHh9n59MUDQU8OBLyo+mwXE/0Iu0A1UzJwBfIH5eMP2be5f1Eh5hpoN66j3dwIJ4AYszLUpn/x34Apuh17myec0VDXodVQtnAcVH34AxM2QAJyAvXb51HfBpteDL1h+uwQl48aCJf83aEpqt/8bioY9DrpvFwPhHIoBXGDYugWMB3+F0BdHgfbhgfVOdiG4F79+9Sp7j9sU4L9vysm2B941m34S9S5wfOHMA8UJ4Jb7ut1+IVatpgUxDJwE09x9DwR0u9NeaamIiwd5oBbM585BXX6+/UAK4/69zPhywFs4nxDDwJHKUlwkqdNhPMXC0siFbGa856HsBHaJQ/L/bJxEI4AH2AwGMGzbam+8fzabJzAdPgRE00AxACFpSACEpCEBEJKGBEBIGhIAIWlIAISkIQEQkoYEQEgaEgAhaUgAhKQhARCSxmUtUOTCLyE6NhYUdDgeIWAsFguYCwsBejjf1MClABQtou17y5MACEGDW/y72ZiMXCBC0pAACEnjzAWiFTCEZKARgJA0JABC0pAACElDAiAkDQmAkDQkAELSkAAISUMCICQNCYCQNCQAQtJIemvEs2fPwvr1P3n1Ho1WA6mjRwEhDiQtgDVr18HcufO9ek9YWBgJQERIWgCZmXvAW2Q875Y9c9an8OuBgyA2hg9/EoYMGQz+jmQFUFNTA4cPZ4G32Gz8Huly8sQp2LdffCc33nPP3SAEJCuAH39cDQQhSQHU1dVBevoXQBCSFMC69Rsgv6AACEJyAigpKYUPP5wOBIFISgBWqxVeGjUaSkvLgCAQycwEo98/fvxEyMo6AgRxDUmMAEajCUanjoGdO3cBQVyP6EeA/PwCGDkymTfj53siTKyn0MoE8h8T7QhQVlYGs+d8DsuWrbC7P3zB90QYzx/nN9gE8h8TlQCKi4th8+YM2Lbt37B33z4wm81AEO4QhADy8/Ph0qXfbnq+trYWjh49BkePHYOcnBwoKCiEhoZcIM+Qy4XhXQtCAKtWr4FPP50N/gC5QJ6BKWchIOlqUKJhwB3FBwzoD0KABOAlfLtA7W9LgurqavAncnNzoYrD7zTu5bHQrl1bEAIkAC/h2wV6/bVXwZ/IPXECHn10CPhK69a3wLhxY0EokACI3zGZTMx4J9pPVfGV2bM/BaVSOGZFAiB+B+dNzp07B76S/MJIuKNLFxASJADCTk7OUVi40Pc1EvFxcfDGG6+B0CABEGA0GmHc+Amc4pvPPpsFGo0GhAYJgICPP5kFeXmXwFeefHIYdO/+ZxAiJACJc/DgIVi06GvwFa1WC5PefhOECglAwuDOGBMmvgJcGDsmFcLDw0GoCEIAPXp0h4kTxgNX5nyeBlwRSpmvJ3w4fQan+qmoyEh46aUUEDKCEEDPHj3sjSsLF6aDkeW6uSCUMt/6OHbsOCxd+j1wYeLE8RAQEABChlwgiTL53SnAhfj4eBg+/CkQOiQACfLTxk2c10a/zQJfLHoTOiQAiYGLhKZ/+BFwoWPHDjDokYEgBkgAEmPR199w3hTsn/+YCmJBWgLgIYMj5CwQrpNOS5sHXLjrrt5w553dQCxISwA8ZHCEnAX6bPbnoNfrgQujR78EYoJcIIlw4cJF+P77ZcCFxMRE6HPvvSAmJCUAGQ8LtYXqAr3/wTTO63RffnkMiA1JCcDGw0JtIbpAuHPG9u07gAvNm0fA4MceBbFBLpAESEubC1xJSU4W1EovTyEBiJzz5y9AxtZtwAUsd3j22adBjJAARM7nPPT+I4Y/BcHBwSBGSAAi5rf8fFi7dh1wAYP+5OSRIFZIACJmwfyFnIP2vn3vg1atWoFYIQGIFJz1/dcPPwJXhj0xFMQMCUCkLFiYznl37JCQYHjwwX4gZkgAIqSqqgqWLFkKXBn617+CSqUCMUMCECFY8oBbnXBl2DBxuz8ICUBkYNC75DvuvX/79knQoUMHEDskAJGxOzOTl4NCnnpyGEgBEoDIwDPRuIIlD0OHit/9QUgAIqK8vBwyMrYCV/r1ewBCQ0NAClA5tLef4cfl0CtWrOS0tfk1xJ77vx4qh/b2M/y0HJqv4BcL3+699x6QCuQCiYT/7N7NS/D7IHN/1Go1SAUS5NLrGAAAB7xJREFUgEjgI/hFhHK4HV+QAESATqezHw7OFZz1vf/+viAlSAAiAI2/rq4OuHJX716irft3BQlABGzcuAn4oH//h0BqkAAETm1tLez4eSfwwcCBD4PUIAEIHJz44sP96dr1DkEfdOErJACB8xNP7o/Usj/XIAEIGHR/uO73c42+990HUoQEIGD4yv6EhITYy5+lCAlAwPDl/vSRUOnDjZAABAr2/Dt37gI+wC3PpQoJQKDgEUcGgwH4oHdv6QrAWX2wvWTSarVWWXmoniQahszMPcAHuOltYmICiBW0YbTlq5c3lfK6EoDNYrFcIQH4L7j0kQ/69BHXfv83gusj0JbBYfw3GbSrFSIW5mNe4WNxBcE/eML74cNZwAd3idz9QRtGW8aHzu67igGsJAD/Zd++/cDX36Zv374gZnwVgMVkMolPACI5JC9zDz/+f8uWLSEysjmIGXTj0ZbBWwGwWUbxCUAkh+TxFQB37twJxA7aMNoyOPH/EZcC0Ov1ohOAGBbF46a3J06cBD7o3EkaAkBbBm9HgMrKStFlgcSwKB7z/3yBJ76LHRRAcXHxb+BCAK66RNOOHTtyme9kE/K5uGIkJ+co8MUdd9wBYgZt12g0mpcsWYJfmsnZa1wJwDh//vzLzHfKwopDwn84kp0NfBAbGyP6za9wppy1PVu2bKlkl053C3bnFBtKSkoyMOdM+A98uUCdOnYEsYO2e/ny5Qz20GXNiDsB1OzatYsE4EcUFl62b3/IBx07iV8ArPe3rVixwmcBGCZNmnSG+VBn+dhrnuBONk/uDyL2DBC67kwAWenp6cXgowAw+jWyHodGAT8hOycH+KKTyEcAtFl04dlDDGJdZnLqS4wbWK9DAvATsrP5EUBgYCC0aNECxAzaLLrw4Kb3R+oTgO7FF188pNPpDvBVe074zkmeJsCS2rUDMYPGzya/DjIX/jS71Lt7bX0CwJmjqr17987gK/gifIP9QeFKSQnwQUJiAogZtNXMzMxp7CGuA3A7++lJbUDlyJEj92MsUF1dDUTTcPrMGeCLhITWIFbQRisqKjJSUlIOgEMAbvFEABhAVGZkZMxiH2ylmeGm4dy588AXiQkJIEawdIfZqGXz5s0z2SVOftVrrJ5Wh1W/+uqrx9kosIr9A0A0PufOnQO+SBCpACorK9H9Wf3666/nskuP3BVPBYBKqli5cuWcqqoqIx970RDewecI0KbNrSA20CbRNpcvXz6bXXrcS3tTH6ybNm3a+dLS0qUlPAVjhOfwNQJERERAUFAQiI0rV65g1eei6dOnX2CXOk/f522BfMnkyZNnsUAjl0TQuJw/z88IIMYAGI2fpepPTJ06dS5eevNeb/cFMm7atOliUlLSCxMmTFitUqliw8LCQCiMG/cy560ENVoNNDaY1x6Tmgp8kJQkrjkA9PtZh3w5LS3teWabF8BF2bMrfF3eFD579uyegwcPXhMdHa3RarVAEI0NdgxFRUXVa9aseYIlafaBI/PjFQrwjVqWaqrq16/fxZCQkIFsal2mUPj6UQThPSaTCX1+K5ukTRk1atRu9pRPM7VcFrjie2N27dqVeuutt06JiYkBEgHRGOAyx8LCQoyL3uvTp88C9lQReJDzdwbXFd5o8TEHDx58r0WLFslYYCWlM2aJxudqz2/P+Nx5551T2VMFUE+5gzu4bpOAC42L2S8y5fTp0+8UFBSYqHKUaCiwHgptLDs7exzaHDh6fk47HfDhs+AvoF+8ePGp22+/fV9UVFR/mUym1WgaP1tCiBesQGCp9+Lt27c/P3z48K3gMH7O+/bw5bSj/6Vbt25dCQuIM1iatCfz01pg3bk/7KRGCBesPcM8f1lZ2fGZM2cOY7l+XBR9bbNbzjSEdYb26NEjZtGiRWls1rE/xgUUHBO+gMEuS3Oi8a9/9tlnX8vKysJev94KT29oqO4ZJwaiNmzY8EiHDh3eZkK4JTQ0lEYDwiOw16+qqkLDzzt+/PiMQYMGbQBHr8/7qqyGtEjs9pu1adMm/Ouvv362devWE8IZeCAbCYFwBhr+1Xr+iosXL6YlJycvPnPmDE5uYY6/QfbpbAxLxLxoBJs1jmL+2+ssSP5bWFiYEoVAENe4avgmlt5c/P7776etXbsWe/xS1szQgDSGc47K1Z08eVKXnp6eydyhjXFxcbEsn9sWc7qIUqmkUUFiYG+PKXN0dUpLSzGvv4XFjSnPPffcGmYrheDo9Rt8c9qmsLpQ1sLeeuutVg8//PCDLEh+iGWLerK0qQqzRtgoaBYnWIiIRo8bLNTW1prZz/3M8Ldt3LgxY8aMGXngqOVp1HW3TdXt4r+LEwUYLAcOGDAgbPz48X1uueWWh4KDg+9XqVThKAIcGZw1Gi38E1ySePVEFletQqfT/ZyXl7c1LS1t55YtW3DhiuFqc7t/T0PhL5aEcYJdDPh49OjRUd27d28ZGxsbz+KFODYqtAwICIhnwohjAoiXy+WhQPgdeBojM/ICs9mcbzQa81lvn19ZWZlfWFiYf+jQofz58+fjLm3o92K5gAG8LF1uCPyxK8XfSQWOtQrKGx7TucbCoO66Zr7hsV/tqiA0X+KaOMgH8k8waEVDF8zWIWRIhKThfmgWQQgYEgAhaUgAhKT5LwAAAP//8oowHwAAAAZJREFUAwCFWdjFrWdBcAAAAABJRU5ErkJggg==" alt="JB's 캘린더 아이콘">
+  <h1>JB's 캘린더<br>최신판으로 바꾸기</h1>
+  <p class="date">2026년 11월 19일 · 최신판 v15 · 아이폰·PC</p>
+</header>
+
+<section class="hero" id="top">
+  <a class="open" href="https://gabook33.github.io/jbcal/" target="_blank" rel="noopener">📅 캘린더 열기</a>
+  <div class="addr" id="addr">https://gabook33.github.io/jbcal/</div>
+  <button type="button" class="copy" id="copyBtn">📋 주소 복사</button>
+  <p id="copyMsg" role="status" aria-live="polite"></p>
+  <p class="sub" style="margin:6px 0 0;text-align:left">복사가 안 되면 위 <b>파란 주소 글자를 길게 눌러</b> 「복사」를 누르세요.</p>
+</section>
+
+<section id="s1">
+  <h2><span class="no">1</span>아이폰 (홈 화면 앱)</h2>
+  <p>새 판은 앱을 <b>닫았다 열면</b> 들어와요. 처음 한 번은 옛 화면이 나올 수 있어서 <b>1~2번</b> 합니다.</p>
+  <ol class="steps">
+    <li>화면 맨 아래를 <b>위로 쓸어 올리다 중간에 멈추면</b> 열린 앱들이 카드로 보여요.</li>
+    <li><b>JB's 캘린더</b> 카드를 <b>위로 휙 밀어</b> 닫습니다.</li>
+    <li>홈 화면 아이콘을 눌러 다시 엽니다.</li>
+    <li>한 번 더 1~3번을 합니다. 이제 최신판이에요.</li>
+  </ol>
+
+  <div class="note"><b>그래도 안 바뀌면</b>
+    <ol class="steps" style="margin-bottom:0">
+      <li>맨 위 <b>「캘린더 열기」</b>를 눌러 <b>사파리</b>로 엽니다.</li>
+      <li>주소창의 <b>새로고침(↻)</b>을 한 번 누르고 잠깐 기다립니다.</li>
+      <li>사파리를 닫고, <b>홈 화면 앱</b>을 다시 엽니다(닫고 열기 1~2번).</li>
+    </ol>
+  </div>
+
+  <div class="note"><b>마지막 방법 — 앱을 지우고 다시 추가</b>
+    <ol class="steps" style="margin-bottom:0">
+      <li>홈 화면의 JB's 캘린더 아이콘을 <b>꾹 눌러</b> → <span class="btn">앱 제거</span> → <span class="btn">삭제</span>.</li>
+      <li>맨 위 <b>「캘린더 열기」</b>로 사파리에서 엽니다.</li>
+      <li>아래 <b>공유 버튼</b>(네모에 위 화살표) → <span class="btn">홈 화면에 추가</span> → <span class="btn">추가</span>.<br><span class="sub">공유 버튼이 안 보이면 주소창 옆 <b>⋯</b> 안에 있어요.</span></li>
+      <li>새 아이콘으로 열고, 구글 연결을 물으면 <b>본인 계정</b>으로 다시 연결합니다.</li>
+    </ol>
+    <p style="margin:6px 0 0">✅ <b>일정·할 일은 구글 캘린더에 저장돼 있어서 앱을 지워도 지워지지 않아요.</b></p>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>PC (크롬·엣지)</h2>
+  <p>캘린더 화면을 띄운 채로 아래 키를 <b>한꺼번에</b> 누르세요. 최신판을 새로 받아요.</p>
+  <ul style="padding-left:22px;margin:8px 0">
+    <li>윈도우: <span class="key">Ctrl</span> + <span class="key">Shift</span> + <span class="key">R</span></li>
+    <li>맥: <span class="key">Cmd</span> + <span class="key">Shift</span> + <span class="key">R</span></li>
+  </ul>
+  <p class="sub" style="margin:0">설치한 앱 창(바탕 화면 아이콘)으로 쓰셔도 같은 키로 됩니다.</p>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>v15 새 기능</h2>
+  <p style="margin:0 0 4px"><span class="tag now">바로 됨</span> 그냥 쓰면 돼요. <span class="tag ask">구글 허용</span> 처음 한 번 허용이 필요해요(아래 4번).</p>
+  <ul class="feat">
+    <li><span class="ic">🎥</span>일정에 Zoom·Teams 회의 링크가 있으면 목록에 <span class="btn">Zoom 참가</span> 같은 버튼이 생겨요. <span class="tag now">바로 됨</span></li>
+    <li><span class="ic">🚗</span>일정 편집에서 장소 아래 <span class="btn">이동 시간 계산</span> → 차로 몇 분 걸리는지와 카카오맵·네이버 지도 길찾기. <span class="tag now">바로 됨</span></li>
+    <li><span class="ic">🔔</span><span class="btn">☰</span> → <span class="btn">이 기기 알림</span> 켜기 → 아이폰이 알림을 물으면 <b>허용</b>. 앱이 열려 있을 때만 울려요. <span class="tag now">바로 됨</span></li>
+    <li><span class="ic">🕒</span>일정 편집에서 <span class="btn">가용 시간 확인</span> → 나와 참석자가 모두 비는 시간을 찾아 줘요. <span class="tag ask">구글 허용</span></li>
+    <li><span class="ic">📎</span><span class="btn">＋ 파일 올리기(구글 드라이브)</span>로 일정에 파일 첨부, 참석자 칸에 <b>이름</b>만 쳐도 연락처에서 찾아요. <span class="tag ask">구글 허용</span></li>
+  </ul>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>처음 쓸 때 「허용」</h2>
+  <p>위 <span class="tag ask">구글 허용</span> 기능을 <b>처음 누를 때 한 번만</b> 나와요.</p>
+  <ol class="steps">
+    <li>「<b>… 구글 권한 추가</b>」 창이 뜨면 <span class="btn">허용하러 가기</span>.</li>
+    <li>구글 화면에서 <b>본인 계정</b>이 맞는지 보고 고릅니다.</li>
+    <li>「<b>확인되지 않은 앱</b>」 경고가 나오면 <b>고급</b> → 아래 <b>「…(으)로 이동」</b>을 누릅니다.<br><span class="sub">가족끼리 쓰려고 직접 만든 앱이라 나오는 안내예요.</span></li>
+    <li>체크 상자가 있으면 <b>체크</b>하고 <span class="btn">계속</span>.</li>
+    <li>앱으로 돌아오면 「<b>‘…’ 권한을 허용했습니다</b>」가 잠깐 보이고, 하던 일정 편집 창이 다시 열려요.</li>
+  </ol>
+  <div class="ok">허용하지 않아도 <b>기존 일정·할 일은 그대로</b> 쓸 수 있어요. 그 기능만 안 될 뿐이에요.</div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>문의</h2>
+  <table class="trouble">
+    <tr><td>「구글 클라우드 프로젝트에서 … API가 꺼져 있습니다」</td><td>구글 쪽 준비가 덜 된 거예요. 화면을 찍어 JB에게 보내 주세요. 다른 기능은 그대로 돼요.</td></tr>
+    <tr><td>그 밖에 막히는 것</td><td>언제든 <b>JB(남편)</b>에게 물어봐 주세요. 🙂</td></tr>
+  </table>
+</section>
+
+<footer>JB's 캘린더 · 최신판 v15 · 2026-11-19</footer>
+</main>
+<script>
+(function () {
+  var URL_ = 'https://gabook33.github.io/jbcal/';
+  var btn = document.getElementById('copyBtn'), msg = document.getElementById('copyMsg'), addr = document.getElementById('addr');
+  function ok() { btn.classList.add('done'); btn.textContent = '✅ 복사했어요'; msg.className = ''; msg.textContent = '사파리 주소창에 붙여 넣으세요.'; }
+  function fail() {
+    msg.className = 'fail'; msg.textContent = '자동 복사가 안 됐어요. 위 파란 주소를 길게 눌러 「복사」를 누르세요.';
+    try { var r = document.createRange(); r.selectNodeContents(addr); var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch (e) {}
+  }
+  btn.addEventListener('click', function () {
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(URL_).then(ok, fail);
+    else fail();
+  });
+})();
+</script>
+</body>
+</html>
