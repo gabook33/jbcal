@@ -146,14 +146,22 @@ function fullWidth(v) { const r = v.addStack(); r.size = new Size(0, 0.5); r.add
 function hstack(parent) { const s = parent.addStack(); s.layoutHorizontally(); return s; }
 function vstack(parent) { const s = parent.addStack(); s.layoutVertically(); return s; }
 
-// 종일 일정 이름표 (캘린더 색 둥근 칸 + 흰 글자)
+// 바탕색 위 글자: 흰/진회색 중 대비(WCAG)가 큰 쪽 — 연한 캘린더 색이면 진회색
+function inkOn(color) {
+  const lin = (v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  if (!color || color.red == null) return C.white;
+  const L = 0.2126 * lin(color.red) + 0.7152 * lin(color.green) + 0.0722 * lin(color.blue);
+  const dark = 0.0115; // #1c1c1e
+  return 1.05 / (L + 0.05) >= (L + 0.05) / (dark + 0.05) ? C.white : new Color("#1c1c1e");
+}
+// 종일 일정 이름표 (캘린더 색 둥근 칸 + 흰/진회색 글자)
 function allDayLabel(parent, ev, size) {
   const row = hstack(parent);
   const lab = hstack(row);
   lab.backgroundColor = ev.color;
   lab.cornerRadius = 4;
   lab.setPadding(1, 6, 1, 6);
-  txt(lab, ev.title, size, C.white, "semibold");
+  txt(lab, ev.title, size, inkOn(ev.color), "semibold");
   row.addSpacer();
   return row;
 }
