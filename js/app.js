@@ -13,6 +13,7 @@ import { confOf, CONF_NEW, freeSlots, dueAlerts, nextAlertAt, alertBody, mapLink
 import { geocode, route, here } from './travel.js';
 import { tasksForDay, groupTasks } from './tasks.js';
 import { ruleOf, buildRRule, describeRule, presetRule, presetOf, REPEAT_OPTIONS } from './recur.js';
+import { APP_VERSION } from './version.js';
 
 /* ---------- 준비 ---------- */
 
@@ -42,6 +43,8 @@ const K_NMUTE = 'nanal.notifMuted'; // 이 기기 알림을 끈 캘린더 id 목
 const K_FIRED = 'nanal.notifFired'; // 이미 보낸 알림 {열쇠: 보낸 시각}
 const K_TRAVEL = 'nanal.travel'; // 일정별 이동 시간 {일정 id: {min, km, place, dest, from, alert}}
 const K_ORIGIN = 'nanal.origin'; // 이동 시간 출발지(비우면 현재 위치)
+const K_FS = 'nanal.textScale'; // 글자 크기 배율(이 기기). 없으면 1 = JB 폰과 같은 기본 크기 — index.html 머리에서 먼저 적용
+const K_UPD = 'nanal.updTried'; // (sessionStorage) 열 때 자동으로 새 버전을 적용해 본 판 — 같은 판으로 되풀이 새로고침하지 않게
 const jget = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const TASKS_KEY = '__tasks'; // 캘린더 켜기·끄기 목록에서 「할 일」 줄(S.hidden 에 같이 저장)
 
@@ -3749,7 +3752,116 @@ async function start() {
   // ?q=문장 : 빠른 입력창을 채운 상태로 연다(공유 링크·화면 확인용, 저장은 하지 않음)
   if (params.get('q')) openQuick(params.get('q'));
 }
+/* ---------- 판 번호·새 버전 적용·글자 크기 ---------- */
+// 화면에 판 번호(v16 같은 작은 글자)를 보이고, 서버의 version.json 과 다르면 「새 버전 적용」 띠를 띄운다.
+// 열자마자(창을 띄우기 전) 알아챈 새 판은 한 번 자동으로 적용한다. 적용 = 새 서비스 워커가 새 파일 한 벌을 다 받은 뒤 새로고침.
+const bootAt = Date.now();
+let srvVer = null; // {version, sw}
+let updBusy = false;
+let lastUpdCheck = 0;
+document.querySelectorAll('[data-ver]').forEach((el) => { el.textContent = APP_VERSION; });
+function paintVerState(txt) { $('#verState').textContent = txt; }
+function anyDialogOpen() {
+  const a = document.activeElement;
+  return !!document.querySelector('dialog[open]') || document.body.classList.contains('menu-open') || /^(INPUT|TEXTAREA|SELECT)$/.test(a?.tagName || '');
+}
+async function checkUpdate({ manual = false } = {}) {
+  if (!manual && Date.now() - lastUpdCheck < 60e3) return;
+  lastUpdCheck = Date.now();
+  try {
+    const res = await fetch(new URL(`../version.json?t=${Date.now()}`, import.meta.url), { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    srvVer = await res.json();
+  } catch {
+    if (manual) { paintVerState('(확인 못 함 · 인터넷 연결 확인)'); toast('새 버전을 확인하지 못했습니다(인터넷 연결 확인)'); }
+    return;
+  }
+  // 서비스 워커에게도 sw.js 가 바뀌었는지 보게 한다(아이폰 홈 화면 앱은 다시 열 때 이 검사를 건너뛰기도 해서)
+  navigator.serviceWorker?.getRegistration?.().then((r) => r?.update()).catch(() => {});
+  if (!srvVer?.version || srvVer.version === APP_VERSION) {
+    $('#updBar').hidden = true;
+    paintVerState('· 최신');
+    if (manual) toast(`최신 버전입니다 (${APP_VERSION})`);
+    return;
+  }
+  paintVerState(`· 새 버전 ${srvVer.version} 있음`);
+  $('#updMsg').textContent = `새 버전 ${srvVer.version}이 나왔습니다`;
+  $('#updBar').hidden = false;
+  // 막 연 참이고 아무 창도 안 열었으면 바로 적용(같은 판으로는 한 번만)
+  if (!manual && Date.now() - bootAt < 20e3 && !anyDialogOpen() && sessionStorage.getItem(K_UPD) !== srvVer.version) {
+    sessionStorage.setItem(K_UPD, srvVer.version);
+    applyUpdate();
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function applyUpdate() {
+  if (updBusy) return;
+  updBusy = true;
+  const btn = $('#updApply');
+  btn.disabled = true;
+  btn.textContent = '받는 중…';
+  const want = srvVer?.sw;
+  const hardReload = async () => {
+    // 서비스 워커가 말을 안 들으면: 저장본을 다 지우고 서비스 워커를 내린 뒤 새 주소로 다시 연다
+    try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+    try { for (const r of (await navigator.serviceWorker?.getRegistrations?.()) || []) await r.unregister(); } catch {}
+    const u = new URL(location.href);
+    u.searchParams.set('v', srvVer?.version || Date.now());
+    location.replace(u.href);
+  };
+  try {
+    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (!reg || !want || !('caches' in self)) { await hardReload(); return; }
+    await reg.update().catch(() => {});
+    for (let i = 0; i < 40; i++) { // 최대 20초
+      if (reg.waiting) reg.waiting.postMessage({ type: 'skipWaiting' });
+      const keys = await caches.keys();
+      if (keys.includes(want) && !reg.installing && !reg.waiting && reg.active?.state === 'activated') { location.reload(); return; }
+      await sleep(500);
+    }
+    await hardReload();
+  } catch {
+    await hardReload();
+  }
+}
+$('#updApply').addEventListener('click', applyUpdate);
+$('#updLater').addEventListener('click', () => { $('#updBar').hidden = true; });
+$('#updCheck').addEventListener('click', () => {
+  if (srvVer && srvVer.version !== APP_VERSION && !$('#updBar').hidden) { applyUpdate(); return; }
+  paintVerState('· 확인 중…');
+  checkUpdate({ manual: true });
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+addEventListener('pageshow', (ev) => { if (ev.persisted) checkUpdate(); });
+setInterval(() => { if (!document.hidden) checkUpdate(); }, 30 * 60e3);
+
+// 글자 크기(이 기기). 기본 1배 = JB 폰과 같은 크기
+const VIEW_KEYS = [K_FS, K_VIEW, K_TK, K_WKNUM]; // 「보기 설정 기본값으로」가 지우는 것(캘린더·일정 자료는 그대로)
+function setTextScale(v) {
+  if (!v || v === 1) { localStorage.removeItem(K_FS); document.documentElement.style.removeProperty('--fs'); } else {
+    localStorage.setItem(K_FS, String(v));
+    document.documentElement.style.setProperty('--fs', v);
+  }
+  syncViewUI();
+}
+function syncViewUI() {
+  const fs = parseFloat(localStorage.getItem(K_FS)) || 1;
+  const sel = $('#textScaleSel');
+  sel.value = [...sel.options].some((o) => +o.value === fs) ? String(fs) : '1';
+  $('#viewReset').hidden = !VIEW_KEYS.some((k) => localStorage.getItem(k) !== null);
+}
+$('#textScaleSel').addEventListener('change', (ev) => { setTextScale(+ev.target.value); render(); });
+$('#viewReset').addEventListener('click', () => {
+  VIEW_KEYS.forEach((k) => localStorage.removeItem(k));
+  document.documentElement.style.removeProperty('--fs');
+  toast('보기 설정을 기본값으로 돌렸습니다');
+  setTimeout(() => location.reload(), 600);
+});
+syncViewUI();
+
 start();
+// 처음 열 때도 서버 판을 확인(새 판이면 띠·자동 적용)
+setTimeout(() => checkUpdate(), 1500);
 
 if ('serviceWorker' in navigator && !params.has('nosw')) {
   // /jbcal/ 같은 하위 경로에서도 앱 루트 기준으로 등록한다(현재 주소의 슬래시 유무와 무관).

@@ -18,6 +18,10 @@
   <link rel="icon" href="icons/icon-16-v14.png" sizes="16x16" type="image/png">
   <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v14.png">
   <link rel="stylesheet" href="css/styles.css">
+  <script>
+    // 글자 크기(이 기기 설정)를 첫 화면부터 적용한다. 설정이 없으면 기본(1배) = JB 폰과 같은 크기
+    try { var fs = parseFloat(localStorage.getItem('nanal.textScale')); if (fs > 0.5 && fs < 2) document.documentElement.style.setProperty('--fs', fs); } catch (e) {}
+  </script>
 </head>
 <body>
   <div class="app" id="app">
@@ -53,7 +57,7 @@
       <div class="sb-top">
         <div class="brand">
           <img src="icons/icon-small-v14.svg" alt="" width="22" height="22">
-          <span id="appName">JB's 캘린더</span>
+          <span id="appName">JB's 캘린더</span> <span class="ver-tag" data-ver></span>
         </div>
         <button class="sb-plus" id="plusBtn" type="button" aria-label="새 일정 빠른 입력" title="새 일정 빠른 입력 (N)">
           <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
@@ -99,6 +103,13 @@
             </select>
           </label>
           <label class="cs-row">주 번호 표시 <input type="checkbox" id="weekNumChk"></label>
+          <label class="cs-row">글자 크기
+            <select id="textScaleSel" aria-label="글자 크기(이 기기)">
+              <option value="0.9">작게</option><option value="1">보통(기본)</option><option value="1.1">크게</option><option value="1.2">아주 크게</option>
+            </select>
+          </label>
+          <div class="cs-row">버전 <span class="cs-ver"><span data-ver></span> <span id="verState"></span></span></div>
+          <div class="cs-btns"><button type="button" class="link-btn" id="updCheck">새 버전 확인</button><button type="button" class="link-btn" id="viewReset" hidden>보기 설정 기본값으로</button></div>
           <label class="cs-row">이 기기 알림 <input type="checkbox" id="notifChk"></label>
           <div class="cs-btns" id="notifMore" hidden><button type="button" class="link-btn" id="notifTest">시험 알림</button><button type="button" class="link-btn" id="notifCals">캘린더별 알림 끄기…</button></div>
           <label class="cs-row">출발지 <input type="text" id="originIn" placeholder="비우면 현재 위치" aria-label="이동 시간 출발지"></label>
@@ -120,6 +131,7 @@
       <!-- 휴대폰 위쪽: 큰 연·월 제목(누르면 오늘로) + 월 달력(손잡이로 한 주까지 접힘) -->
       <div class="m-head">
         <button class="m-month" id="monthToggle" aria-label="오늘로 이동"><span id="mTitle"></span></button>
+        <span class="ver-tag" data-ver></span>
       </div>
       <div class="ticker" id="ticker"></div>
 
@@ -324,6 +336,7 @@
   <dialog class="ask" id="ask" aria-labelledby="askTitle"></dialog>
 
   <div class="toast" id="toast" hidden></div>
+  <div class="upd-bar" id="updBar" role="alert" hidden><span id="updMsg">새 버전이 있습니다</span><button type="button" id="updApply">새 버전 적용</button><button type="button" class="x" id="updLater" aria-label="나중에">✕</button></div>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
